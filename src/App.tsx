@@ -33,9 +33,9 @@ export default function App() {
   const [selectedSize, setSelectedSize] = useState<keyof typeof PAPER_SIZES>('A4');
   const [paperColor, setPaperColor] = useState<string>('#ff944d');
 
-  // 選択中要素のプロパティ
-  const [strokeWidth, setStrokeWidth] = useState<number>(4);
-  const [fontSizeInput, setFontSizeInput] = useState<string>('32'); // 入力用の文字列状態
+  // 選択中要素のプロパティ入力（全消去対応のため文字列管理）
+  const [strokeWidthInput, setStrokeWidthInput] = useState<string>('4');
+  const [fontSizeInput, setFontSizeInput] = useState<string>('32');
   const [fontFamily, setFontFamily] = useState<string>('sans-serif');
   const [threshold, setThreshold] = useState<number>(128);
   const [selectedObjectType, setSelectedObjectType] = useState<string | null>(null);
@@ -50,7 +50,7 @@ export default function App() {
   // レイヤーリストの更新
   const refreshObjectsList = (canvas: fabric.Canvas) => {
     const objs = canvas.getObjects().filter((obj) => obj.type !== 'line');
-    setObjectsList([...objs].reverse()); // 前面にあるものを上に表示
+    setObjectsList([...objs].reverse());
   };
 
   // Canvasの初期化
@@ -109,7 +109,7 @@ export default function App() {
         }
         if (Math.abs(targetCenter.y - objCenter.y) < snapThreshold) {
           target.setPositionByOrigin(new fabric.Point(targetCenter.x, objCenter.y), 'center', 'center');
-          drawGuideLine(0, objCenter.y, size.width, objCenter.y);
+          drawGuideLine(0, size.height / 2, size.width, size.height / 2);
         }
       });
 
@@ -125,11 +125,15 @@ export default function App() {
       setActiveObject(activeObj || null);
       if (activeObj) {
         setSelectedObjectType(activeObj.type);
-        if (activeObj.strokeWidth) setStrokeWidth(activeObj.strokeWidth);
+        if (activeObj.strokeWidth) {
+          setStrokeWidthInput(String(activeObj.strokeWidth));
+        }
         if ((activeObj as fabric.IText).fontSize) {
           setFontSizeInput(String((activeObj as fabric.IText).fontSize));
         }
-        if ((activeObj as fabric.IText).fontFamily) setFontFamily((activeObj as fabric.IText).fontFamily);
+        if ((activeObj as fabric.IText).fontFamily) {
+          setFontFamily((activeObj as fabric.IText).fontFamily);
+        }
       } else {
         setSelectedObjectType(null);
       }
@@ -182,6 +186,7 @@ export default function App() {
   // 図形追加
   const addRectangle = () => {
     if (!fabricCanvas) return;
+    const sw = parseInt(strokeWidthInput, 10) || 4;
     const rect = new fabric.Rect({
       left: 50,
       top: 120,
@@ -189,7 +194,7 @@ export default function App() {
       height: 100,
       fill: 'transparent',
       stroke: '#000000',
-      strokeWidth: strokeWidth,
+      strokeWidth: sw,
     });
     fabricCanvas.add(rect);
     fabricCanvas.setActiveObject(rect);
@@ -197,30 +202,33 @@ export default function App() {
 
   const addCircle = () => {
     if (!fabricCanvas) return;
+    const sw = parseInt(strokeWidthInput, 10) || 4;
     const circle = new fabric.Circle({
       left: 100,
       top: 100,
       radius: 50,
       fill: 'transparent',
       stroke: '#000000',
-      strokeWidth: strokeWidth,
+      strokeWidth: sw,
     });
     fabricCanvas.add(circle);
     fabricCanvas.setActiveObject(circle);
   };
 
-  // 属性更新
-  const updateStrokeWidth = (width: number) => {
-    setStrokeWidth(width);
-    if (!fabricCanvas) return;
-    const activeObj = fabricCanvas.getActiveObject();
-    if (activeObj) {
-      activeObj.set('strokeWidth', width);
-      fabricCanvas.renderAll();
+  // 線の太さ変更（全消去可能）
+  const handleStrokeWidthChange = (valStr: string) => {
+    setStrokeWidthInput(valStr);
+    const num = parseInt(valStr, 10);
+    if (!isNaN(num) && num >= 0 && fabricCanvas) {
+      const activeObj = fabricCanvas.getActiveObject();
+      if (activeObj) {
+        activeObj.set('strokeWidth', num);
+        fabricCanvas.renderAll();
+      }
     }
   };
 
-  // フォントサイズ変更（全消去できるように文字列で管理）
+  // フォントサイズ変更（全消去可能）
   const handleFontSizeChange = (valStr: string) => {
     setFontSizeInput(valStr);
     const num = parseInt(valStr, 10);
@@ -307,7 +315,7 @@ export default function App() {
     }
   };
 
-  // 画像トリミング
+  // 画像トリミング（直接切抜）
   const cropImage = (type: 'rect' | 'circle') => {
     if (!fabricCanvas) return;
     const activeObj = fabricCanvas.getActiveObject() as fabric.Image;
@@ -333,6 +341,53 @@ export default function App() {
       });
     }
 
+    activeObj.set('clipPath', clipPath);
+    fabricCanvas.renderAll();
+  };
+
+  // 重なった四角・丸型に画像マスク（クリッピング）をかける機能
+  const maskWithShapeLayer = () => {
+    if (!fabricCanvas) return;
+    const activeObj = fabricCanvas.getActiveObject() as fabric.Image;
+    if (!activeObj || activeObj.type !== 'image') return;
+
+    // 画像と重なっている図形（rect / circle）を検出
+    const shapes = fabricCanvas.getObjects().filter((o) => o.type === 'rect' || o.type === 'circle');
+    const imgCenter = activeObj.getCenterPoint();
+
+    // 一番近く重なっている図形を取得
+    const targetShape = shapes.find((shape) => {
+      const shapeCenter = shape.getCenterPoint();
+      const dist = Math.hypot(shapeCenter.x - imgCenter.x, shapeCenter.y - imgCenter.y);
+      return dist < 150; // 近接距離内
+    });
+
+    if (!targetShape) {
+      alert('画像と重ね合わせた「四角」または「円」の枠線を近くに配置してください。');
+      return;
+    }
+
+    let clipPath: fabric.Object;
+    if (targetShape.type === 'circle') {
+      const circle = targetShape as fabric.Circle;
+      const radius = circle.radius * circle.scaleX;
+      clipPath = new fabric.Circle({
+        radius: radius / activeObj.scaleX,
+        originX: 'center',
+        originY: 'center',
+      });
+    } else {
+      const rect = targetShape as fabric.Rect;
+      clipPath = new fabric.Rect({
+        width: (rect.width * rect.scaleX) / activeObj.scaleX,
+        height: (rect.height * rect.scaleY) / activeObj.scaleY,
+        originX: 'center',
+        originY: 'center',
+      });
+    }
+
+    // 位置をぴったりスナップ
+    activeObj.setPositionByOrigin(targetShape.getCenterPoint(), 'center', 'center');
     activeObj.set('clipPath', clipPath);
     fabricCanvas.renderAll();
   };
@@ -419,7 +474,7 @@ export default function App() {
                   cursor: 'pointer',
                   backgroundColor: selectedSize === sizeKey ? '#000000' : '#ffffff',
                   color: selectedSize === sizeKey ? '#ffffff' : '#374151',
-                  fontWeight: selectedSize === sizeKey ? 'bold' : 'normal',
+                  fontWeight: selectedSize === sizeKey ? '#bold' : 'normal',
                 }}
               >
                 {PAPER_SIZES[sizeKey].label}
@@ -473,20 +528,23 @@ export default function App() {
         <div style={{ backgroundColor: '#f9fafb', padding: '10px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
           <label style={{ ...labelStyle, marginBottom: '6px' }}>4. 選択中パーツの編集</label>
           
-          {/* 線の太さ */}
+          {/* 線の太さ（px数値入力） */}
           <div style={{ marginBottom: '8px' }}>
-            <span style={{ fontSize: '11px', color: '#6b7280' }}>線の太さ: {strokeWidth}px</span>
-            <input
-              type="range"
-              min="1"
-              max="20"
-              value={strokeWidth}
-              onChange={(e) => updateStrokeWidth(Number(e.target.value))}
-              style={{ width: '100%' }}
-            />
+            <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>線の太さ</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={strokeWidthInput}
+                onChange={(e) => handleStrokeWidthChange(e.target.value)}
+                placeholder="太さ"
+                style={{ width: '70px', padding: '4px 6px', fontSize: '12px', borderRadius: '4px', border: '1px solid #d1d5db' }}
+              />
+              <span style={{ fontSize: '12px', color: '#6b7280' }}>px</span>
+            </div>
           </div>
 
-          {/* フォント指定 & 文字サイズ（修正箇所） */}
+          {/* フォント指定 & 文字サイズ（px数値入力） */}
           <div style={{ marginBottom: '8px' }}>
             <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>フォント・文字サイズ</span>
             <select
@@ -511,7 +569,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* 画像コントロール */}
+          {/* 画像コントロール & 図形マスク */}
           {selectedObjectType === 'image' && (
             <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '8px', marginTop: '8px' }}>
               <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>モノクロ濃淡: {threshold}</span>
@@ -523,9 +581,14 @@ export default function App() {
                 onChange={(e) => updateImageThreshold(Number(e.target.value))}
                 style={{ width: '100%', marginBottom: '6px' }}
               />
-              <div style={{ display: 'flex', gap: '4px' }}>
-                <button onClick={() => cropImage('rect')} style={{ ...btnStyle, flex: 1, padding: '4px', fontSize: '10px', textAlign: 'center' }}>正方形切抜</button>
-                <button onClick={() => cropImage('circle')} style={{ ...btnStyle, flex: 1, padding: '4px', fontSize: '10px', textAlign: 'center' }}>円形切抜</button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <button onClick={maskWithShapeLayer} style={{ ...btnStyle, backgroundColor: '#eff6ff', borderColor: '#bfdbfe', color: '#1d4ed8', fontSize: '11px', textAlign: 'center', fontWeight: 'bold' }}>
+                  🎯 重ねた図形でマスク
+                </button>
+                <div style={{ display: 'flex', gap: '4px' }}>
+                  <button onClick={() => cropImage('rect')} style={{ ...btnStyle, flex: 1, padding: '4px', fontSize: '10px', textAlign: 'center' }}>正方形切抜</button>
+                  <button onClick={() => cropImage('circle')} style={{ ...btnStyle, flex: 1, padding: '4px', fontSize: '10px', textAlign: 'center' }}>円形切抜</button>
+                </div>
               </div>
             </div>
           )}
