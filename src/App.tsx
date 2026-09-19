@@ -25,36 +25,27 @@ const FONTS = [
   { name: 'インパクト（太字）', family: 'Impact, sans-serif' },
 ];
 
-interface MaskData {
-  shapeType: 'rect' | 'circle';
-  width: number;
-  height: number;
-  radius: number;
-  stroke: string;
-  strokeWidth: number;
-}
-
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const modalCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const [fabricCanvas, setFabricCanvas] = useState<fabric.Canvas | null>(null);
-  const [modalCanvas, setModalCanvas] = useState<fabric.Canvas | null>(null);
 
   const [selectedSize, setSelectedSize] = useState<keyof typeof PAPER_SIZES>('A4');
   const [paperColor, setPaperColor] = useState<string>('#ff944d');
 
-  // プロパティ状態
+  // 編集プロパティ状態
   const [strokeWidthInput, setStrokeWidthInput] = useState<string>('4');
   const [fontSizeInput, setFontSizeInput] = useState<string>('32');
   const [fontFamily, setFontFamily] = useState<string>('sans-serif');
   const [threshold, setThreshold] = useState<number>(128);
   const [selectedObjectType, setSelectedObjectType] = useState<string | null>(null);
   const [hasMask, setHasMask] = useState<boolean>(false);
+  const [isEditingMaskMode, setIsEditingMaskMode] = useState<boolean>(false);
 
   // レイヤー管理
   const [objectsList, setObjectsList] = useState<fabric.Object[]>([]);
   const [activeObject, setActiveObject] = useState<fabric.Object | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState<{ [key: number]: boolean }>({});
 
   // 履歴（Undo）管理
   const historyRef = useRef<string[]>([]);
@@ -64,11 +55,8 @@ export default function App() {
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
-  // マスク微調整モーダル状態
-  const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
-  const [editingGroup, setEditingGroup] = useState<any>(null);
-
   const guideLinesRef = useRef<fabric.Line[]>([]);
+  const currentEditingGroupRef = useRef<any>(null);
 
   // 状態の保存（Undo用）
   const saveHistory = (canvas: fabric.Canvas) => {
@@ -84,8 +72,12 @@ export default function App() {
   const undo = () => {
     if (!fabricCanvas || historyRef.current.length <= 1) return;
 
+    if (currentEditingGroupRef.current) {
+      exitMaskEditMode();
+    }
+
     isRedoingRef.current = true;
-    historyRef.current.pop(); // 現在の状態を捨てる
+    historyRef.current.pop();
     const prevState = historyRef.current[historyRef.current.length - 1];
 
     fabricCanvas.loadFromJSON(prevState, () => {
@@ -128,7 +120,7 @@ export default function App() {
       guideLinesRef.current.push(line);
     };
 
-    // スマートガイド機能
+    // スマートガイド
     canvas.on('object:moving', (e) => {
       clearGuides();
       const target = e.target;
@@ -184,9 +176,22 @@ export default function App() {
       saveHistory(canvas);
     });
 
+    // ダブルクリックでキャンバス上でダイレクトマスク微調整モードへ
+    canvas.on('mouse:dblclick', (e) => {
+      const target = e.target as any;
+      if (target && target._isMaskGroup) {
+        enterMaskEditMode(canvas, target);
+      }
+    });
+
     const handleSelection = () => {
       const activeObj = canvas.getActiveObject() as any;
       setActiveObject(activeObj || null);
+
+      if (currentEditingGroupRef.current && activeObj !== currentEditingGroupRef.current._maskedImage) {
+        exitMaskEditMode();
+      }
+
       if (activeObj) {
         setSelectedObjectType(activeObj.type);
         setHasMask(!!activeObj._isMaskGroup);
@@ -209,6 +214,9 @@ export default function App() {
     canvas.on('selection:created', handleSelection);
     canvas.on('selection:updated', handleSelection);
     canvas.on('selection:cleared', () => {
+      if (currentEditingGroupRef.current) {
+        exitMaskEditMode();
+      }
       setActiveObject(null);
       setSelectedObjectType(null);
       setHasMask(false);
@@ -232,7 +240,7 @@ export default function App() {
     };
   }, [selectedSize]);
 
-  // キーボードショートカット（Undo ＆ 矢印キー移動）
+  // キーボード操作（Undo / 矢印キーで1px・10px微調整）
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!fabricCanvas) return;
@@ -242,7 +250,6 @@ export default function App() {
         return;
       }
 
-      // 1. Ctrl+Z / Cmd+Z でUndo
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         undo();
@@ -252,7 +259,6 @@ export default function App() {
       const activeObj = fabricCanvas.getActiveObject();
       if (!activeObj) return;
 
-      // 2. 矢印キーで移動
       const step = e.shiftKey ? 10 : 1;
       let moved = false;
 
@@ -284,72 +290,242 @@ export default function App() {
     };
   }, [fabricCanvas]);
 
-  // モーダル用キャンバスの初期化
-  useEffect(() => {
-    if (isModalOpen && modalCanvasRef.current && editingGroup) {
-      const mCanvas = new fabric.Canvas(modalCanvasRef.current, {
-        width: 400,
-        height: 400,
-        backgroundColor: '#e5e7eb',
+  // マスク内部の直接編集モードに入る
+  const enterMaskEditMode = (canvas: fabric.Canvas, group: any) => {
+    currentEditingGroupRef.current = group;
+    setIsEditingMaskMode(true);
+
+    const imgObj = group._maskedImage;
+    const origShape = group._frameShape;
+
+    // グループを分解して画像のみ選択可能にする
+    const groupCenter = group.getCenterPoint();
+    const offsetX = imgObj._maskOffsetX || 0;
+    const offsetY = imgObj._maskOffsetY || 0;
+
+    canvas.remove(group);
+
+    // くり抜き（clipPath）
+    const clipPath = createClipPath(origShape, imgObj, offsetX, offsetY);
+    imgObj.set({
+      clipPath: clipPath,
+      left: groupCenter.x + offsetX,
+      top: groupCenter.y + offsetY,
+      originX: 'center',
+      originY: 'center',
+    });
+
+    // 枠線をプレビュー描画
+    let frameObj: fabric.Object;
+    if (origShape.type === 'circle') {
+      const radius = origShape.radius * (origShape.scaleX || 1);
+      frameObj = new fabric.Circle({
+        radius: radius,
+        fill: 'transparent',
+        stroke: origShape.stroke || '#000',
+        strokeWidth: origShape.strokeWidth || 4,
+        originX: 'center',
+        originY: 'center',
+        left: groupCenter.x,
+        top: groupCenter.y,
+        selectable: false,
+        evented: false,
       });
+    } else {
+      const w = origShape.width * (origShape.scaleX || 1);
+      const h = origShape.height * (origShape.scaleY || 1);
+      frameObj = new fabric.Rect({
+        width: w,
+        height: h,
+        fill: 'transparent',
+        stroke: origShape.stroke || '#000',
+        strokeWidth: origShape.strokeWidth || 4,
+        originX: 'center',
+        originY: 'center',
+        left: groupCenter.x,
+        top: groupCenter.y,
+        selectable: false,
+        evented: false,
+      });
+    }
 
-      const maskInfo: MaskData = editingGroup._maskData;
-      const targetImg = editingGroup._maskedImage;
-      const center = { x: 200, y: 200 };
+    (frameObj as any)._isTempFrame = true;
 
-      let guideShape: fabric.Object;
-      if (maskInfo.shapeType === 'circle') {
-        guideShape = new fabric.Circle({
-          radius: maskInfo.radius,
-          fill: 'rgba(255, 0, 0, 0.1)',
-          stroke: '#ef4444',
-          strokeWidth: 2,
-          strokeDashArray: [4, 4],
-          originX: 'center',
-          originY: 'center',
-          left: center.x,
-          top: center.y,
-          selectable: false,
-          evented: false,
-        });
-      } else {
-        guideShape = new fabric.Rect({
-          width: maskInfo.width,
-          height: maskInfo.height,
-          fill: 'rgba(255, 0, 0, 0.1)',
-          stroke: '#ef4444',
-          strokeWidth: 2,
-          strokeDashArray: [4, 4],
-          originX: 'center',
-          originY: 'center',
-          left: center.x,
-          top: center.y,
-          selectable: false,
-          evented: false,
-        });
-      }
+    canvas.add(imgObj);
+    canvas.add(frameObj);
+    canvas.setActiveObject(imgObj);
 
-      const previewImg = new fabric.Image(targetImg.getElement(), {
-        left: center.x + (targetImg._maskOffsetX || 0),
-        top: center.y + (targetImg._maskOffsetY || 0),
-        scaleX: targetImg.scaleX,
-        scaleY: targetImg.scaleY,
+    // 画像が移動した際にクリッピング領域を動的に更新
+    imgObj.on('moving', () => {
+      const currentOffsetX = imgObj.left - groupCenter.x;
+      const currentOffsetY = imgObj.top - groupCenter.y;
+      imgObj.set('clipPath', createClipPath(origShape, imgObj, currentOffsetX, currentOffsetY));
+      canvas.renderAll();
+    });
+
+    imgObj.on('scaling', () => {
+      const currentOffsetX = imgObj.left - groupCenter.x;
+      const currentOffsetY = imgObj.top - groupCenter.y;
+      imgObj.set('clipPath', createClipPath(origShape, imgObj, currentOffsetX, currentOffsetY));
+      canvas.renderAll();
+    });
+
+    canvas.renderAll();
+  };
+
+  // 直接編集モードを抜けてグループに復帰
+  const exitMaskEditMode = () => {
+    if (!fabricCanvas || !currentEditingGroupRef.current) return;
+
+    const group = currentEditingGroupRef.current;
+    const imgObj = group._maskedImage;
+    const origShape = group._frameShape;
+
+    const tempFrame = fabricCanvas.getObjects().find((o) => (o as any)._isTempFrame);
+    if (tempFrame) fabricCanvas.remove(tempFrame);
+
+    const groupCenter = { x: tempFrame ? tempFrame.left : group.left, y: tempFrame ? tempFrame.top : group.top };
+    const offsetX = imgObj.left - groupCenter.x;
+    const offsetY = imgObj.top - groupCenter.y;
+
+    imgObj.off('moving');
+    imgObj.off('scaling');
+
+    fabricCanvas.remove(imgObj);
+
+    createMaskGroup(imgObj, origShape, offsetX, offsetY, groupCenter);
+
+    currentEditingGroupRef.current = null;
+    setIsEditingMaskMode(false);
+  };
+
+  const createClipPath = (targetShape: fabric.Object, imageObj: any, offsetX: number, offsetY: number) => {
+    const scaleX = imageObj.scaleX || 1;
+    const scaleY = imageObj.scaleY || 1;
+
+    if (targetShape.type === 'circle') {
+      const circle = targetShape as fabric.Circle;
+      const radius = circle.radius * (circle.scaleX || 1);
+
+      return new fabric.Circle({
+        radius: radius / scaleX,
+        originX: 'center',
+        originY: 'center',
+        left: -offsetX / scaleX,
+        top: -offsetY / scaleY,
+      });
+    } else {
+      const rect = targetShape as fabric.Rect;
+      const w = rect.width * (rect.scaleX || 1);
+      const h = rect.height * (rect.scaleY || 1);
+
+      return new fabric.Rect({
+        width: w / scaleX,
+        height: h / scaleY,
+        originX: 'center',
+        originY: 'center',
+        left: -offsetX / scaleX,
+        top: -offsetY / scaleY,
+      });
+    }
+  };
+
+  // 画像と枠線を一体化（グループ化）
+  const createMaskGroup = (imageObj: any, targetShape: fabric.Object, offsetX = 0, offsetY = 0, currentGroupPos?: { x: number; y: number }) => {
+    if (!fabricCanvas) return;
+
+    const shapeCenter = currentGroupPos || targetShape.getCenterPoint();
+    let clipPath = createClipPath(targetShape, imageObj, offsetX, offsetY);
+    let frameObj: fabric.Object;
+
+    if (targetShape.type === 'circle') {
+      const circle = targetShape as fabric.Circle;
+      const radius = circle.radius * (circle.scaleX || 1);
+
+      frameObj = new fabric.Circle({
+        radius: radius,
+        fill: 'transparent',
+        stroke: circle.stroke,
+        strokeWidth: circle.strokeWidth,
         originX: 'center',
         originY: 'center',
       });
+    } else {
+      const rect = targetShape as fabric.Rect;
+      const w = rect.width * (rect.scaleX || 1);
+      const h = rect.height * (rect.scaleY || 1);
 
-      mCanvas.add(previewImg);
-      mCanvas.add(guideShape);
-      mCanvas.setActiveObject(previewImg);
-      mCanvas.renderAll();
-
-      setModalCanvas(mCanvas);
-
-      return () => {
-        mCanvas.dispose();
-      };
+      frameObj = new fabric.Rect({
+        width: w,
+        height: h,
+        fill: 'transparent',
+        stroke: rect.stroke,
+        strokeWidth: rect.strokeWidth,
+        originX: 'center',
+        originY: 'center',
+      });
     }
-  }, [isModalOpen]);
+
+    imageObj.set({
+      originX: 'center',
+      originY: 'center',
+      left: offsetX,
+      top: offsetY,
+      clipPath: clipPath,
+    });
+
+    imageObj._maskOffsetX = offsetX;
+    imageObj._maskOffsetY = offsetY;
+
+    const group = new fabric.Group([imageObj, frameObj], {
+      left: shapeCenter.x,
+      top: shapeCenter.y,
+      originX: 'center',
+      originY: 'center',
+    });
+
+    (group as any)._isMaskGroup = true;
+    (group as any)._maskedImage = imageObj;
+    (group as any)._frameShape = targetShape;
+
+    fabricCanvas.remove(imageObj);
+    fabricCanvas.remove(targetShape);
+
+    fabricCanvas.add(group);
+    fabricCanvas.setActiveObject(group);
+    fabricCanvas.renderAll();
+  };
+
+  // マスク（グループ）解除
+  const removeMask = () => {
+    if (!fabricCanvas) return;
+    const activeObj = fabricCanvas.getActiveObject() as any;
+    if (activeObj && activeObj._isMaskGroup) {
+      const imgObj = activeObj._maskedImage;
+      const shapeObj = activeObj._frameShape;
+
+      imgObj.set({
+        clipPath: undefined,
+        left: activeObj.left,
+        top: activeObj.top,
+      });
+      delete imgObj._maskOffsetX;
+      delete imgObj._maskOffsetY;
+
+      shapeObj.set({
+        left: activeObj.left + 20,
+        top: activeObj.top + 20,
+      });
+
+      fabricCanvas.remove(activeObj);
+      fabricCanvas.add(imgObj);
+      fabricCanvas.add(shapeObj);
+
+      fabricCanvas.setActiveObject(imgObj);
+      setHasMask(false);
+      fabricCanvas.renderAll();
+    }
+  };
 
   const handleColorChange = (color: string) => {
     setPaperColor(color);
@@ -413,7 +589,7 @@ export default function App() {
       const activeObj = fabricCanvas.getActiveObject();
       if (activeObj) {
         if ((activeObj as any)._isMaskGroup) {
-          const frame = (activeObj as fabric.Group).getObjects().find(o => o.type !== 'image');
+          const frame = (activeObj as fabric.Group).getObjects().find((o) => o.type !== 'image');
           if (frame) frame.set('strokeWidth', num);
         } else {
           activeObj.set('strokeWidth', num);
@@ -519,126 +695,7 @@ export default function App() {
     }
   };
 
-  // 画像と枠線を一体化（グループ化）してマスク適用（ズレ不具合修正版）
-  const createMaskGroup = (imageObj: any, targetShape: fabric.Object, offsetX = 0, offsetY = 0, currentGroupPos?: { x: number; y: number }) => {
-    if (!fabricCanvas) return;
-
-    const shapeCenter = currentGroupPos || targetShape.getCenterPoint();
-    let maskData: MaskData;
-    let clipPath: fabric.Object;
-    let frameObj: fabric.Object;
-
-    if (targetShape.type === 'circle') {
-      const circle = targetShape as fabric.Circle;
-      const radius = circle.radius * circle.scaleX;
-      maskData = { shapeType: 'circle', radius, width: radius * 2, height: radius * 2, stroke: circle.stroke as string, strokeWidth: circle.strokeWidth };
-
-      clipPath = new fabric.Circle({
-        radius: radius / imageObj.scaleX,
-        originX: 'center',
-        originY: 'center',
-        left: -offsetX / imageObj.scaleX,
-        top: -offsetY / imageObj.scaleY,
-      });
-
-      frameObj = new fabric.Circle({
-        radius: radius,
-        fill: 'transparent',
-        stroke: circle.stroke,
-        strokeWidth: circle.strokeWidth,
-        originX: 'center',
-        originY: 'center',
-      });
-    } else {
-      const rect = targetShape as fabric.Rect;
-      const w = rect.width * rect.scaleX;
-      const h = rect.height * rect.scaleY;
-      maskData = { shapeType: 'rect', width: w, height: h, radius: 0, stroke: rect.stroke as string, strokeWidth: rect.strokeWidth };
-
-      clipPath = new fabric.Rect({
-        width: w / imageObj.scaleX,
-        height: h / imageObj.scaleY,
-        originX: 'center',
-        originY: 'center',
-        left: -offsetX / imageObj.scaleX,
-        top: -offsetY / imageObj.scaleY,
-      });
-
-      frameObj = new fabric.Rect({
-        width: w,
-        height: h,
-        fill: 'transparent',
-        stroke: rect.stroke,
-        strokeWidth: rect.strokeWidth,
-        originX: 'center',
-        originY: 'center',
-      });
-    }
-
-    imageObj.set({
-      originX: 'center',
-      originY: 'center',
-      left: offsetX,
-      top: offsetY,
-      clipPath: clipPath,
-    });
-
-    imageObj._maskOffsetX = offsetX;
-    imageObj._maskOffsetY = offsetY;
-
-    // グループ化
-    const group = new fabric.Group([imageObj, frameObj], {
-      left: shapeCenter.x,
-      top: shapeCenter.y,
-      originX: 'center',
-      originY: 'center',
-    });
-
-    (group as any)._isMaskGroup = true;
-    (group as any)._maskData = maskData;
-    (group as any)._maskedImage = imageObj;
-    (group as any)._frameShape = targetShape;
-
-    fabricCanvas.remove(imageObj);
-    fabricCanvas.remove(targetShape);
-
-    fabricCanvas.add(group);
-    fabricCanvas.setActiveObject(group);
-    fabricCanvas.renderAll();
-  };
-
-  // マスク（グループ）解除
-  const removeMask = () => {
-    if (!fabricCanvas) return;
-    const activeObj = fabricCanvas.getActiveObject() as any;
-    if (activeObj && activeObj._isMaskGroup) {
-      const imgObj = activeObj._maskedImage;
-      const shapeObj = activeObj._frameShape;
-
-      imgObj.set({
-        clipPath: undefined,
-        left: activeObj.left,
-        top: activeObj.top,
-      });
-      delete imgObj._maskOffsetX;
-      delete imgObj._maskOffsetY;
-
-      shapeObj.set({
-        left: activeObj.left + 20,
-        top: activeObj.top + 20,
-      });
-
-      fabricCanvas.remove(activeObj);
-      fabricCanvas.add(imgObj);
-      fabricCanvas.add(shapeObj);
-
-      fabricCanvas.setActiveObject(imgObj);
-      setHasMask(false);
-      fabricCanvas.renderAll();
-    }
-  };
-
-  // ドラッグ＆ドロップ処理
+  // ドラッグ＆ドロップ処理（レイヤー並べ替え ＆ 重ね合わせでマスク化）
   const handleDragStart = (e: React.DragEvent<HTMLDivElement>, index: number) => {
     setDraggedIndex(index);
     e.dataTransfer.effectAllowed = 'move';
@@ -688,31 +745,6 @@ export default function App() {
     refreshObjectsList(fabricCanvas);
   };
 
-  // 微調整モーダルで決定された結果をキャンバスへ反映
-  const saveModalAdjustment = () => {
-    if (!modalCanvas || !editingGroup || !fabricCanvas) return;
-
-    const previewImg = modalCanvas.getObjects().find((o) => o.type === 'image') as fabric.Image;
-    if (previewImg) {
-      const offsetX = previewImg.left - 200;
-      const offsetY = previewImg.top - 200;
-
-      const targetImg = editingGroup._maskedImage;
-      const origShape = editingGroup._frameShape;
-      const groupPos = { x: editingGroup.left, y: editingGroup.top };
-
-      targetImg.set({
-        scaleX: previewImg.scaleX,
-        scaleY: previewImg.scaleY,
-      });
-
-      fabricCanvas.remove(editingGroup);
-      createMaskGroup(targetImg, origShape, offsetX, offsetY, groupPos);
-    }
-
-    setIsModalOpen(false);
-  };
-
   const deleteSelected = () => {
     if (!fabricCanvas) return;
     const activeObjects = fabricCanvas.getActiveObjects();
@@ -723,6 +755,10 @@ export default function App() {
 
   const exportForPrint = () => {
     if (!fabricCanvas) return;
+
+    if (currentEditingGroupRef.current) {
+      exitMaskEditMode();
+    }
 
     const defaultName = `flyer_${selectedSize}`;
     const fileName = prompt('保存するファイル名を入力してください:', defaultName);
@@ -757,6 +793,11 @@ export default function App() {
     if (obj.type === 'circle') return '⚪ 円枠';
     if (obj.type === 'image') return '🖼 画像';
     return 'パーツ';
+  };
+
+  const toggleGroupExpand = (index: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpandedGroups((prev) => ({ ...prev, [index]: !prev[index] }));
   };
 
   return (
@@ -875,7 +916,7 @@ export default function App() {
             </div>
           </div>
 
-          {(selectedObjectType === 'image' || hasMask) && (
+          {(selectedObjectType === 'image' || hasMask || isEditingMaskMode) && (
             <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '8px', marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <div>
                 <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>モノクロ濃淡: {threshold}</span>
@@ -889,12 +930,13 @@ export default function App() {
                 />
               </div>
 
-              {hasMask && (
+              {hasMask && !isEditingMaskMode && (
                 <>
                   <button
                     onClick={() => {
-                      setEditingGroup(activeObject);
-                      setIsModalOpen(true);
+                      if (fabricCanvas && activeObject) {
+                        enterMaskEditMode(fabricCanvas, activeObject);
+                      }
                     }}
                     style={{ ...btnStyle, backgroundColor: '#2563eb', color: '#ffffff', border: 'none', textAlign: 'center', fontWeight: 'bold' }}
                   >
@@ -907,6 +949,15 @@ export default function App() {
                     🔓 マスク（グループ）を解除
                   </button>
                 </>
+              )}
+
+              {isEditingMaskMode && (
+                <button
+                  onClick={exitMaskEditMode}
+                  style={{ ...btnStyle, backgroundColor: '#16a34a', color: '#ffffff', border: 'none', textAlign: 'center', fontWeight: 'bold' }}
+                >
+                  ✓ 微調整を完了する
+                </button>
               )}
             </div>
           )}
@@ -933,91 +984,111 @@ export default function App() {
       </div>
 
       {/* 右レイヤーパネル */}
-      <div style={{ width: '240px', backgroundColor: '#ffffff', borderLeft: '1px solid #e5e7eb', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px', boxSizing: 'border-box' }}>
+      <div style={{ width: '250px', backgroundColor: '#ffffff', borderLeft: '1px solid #e5e7eb', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px', boxSizing: 'border-box' }}>
         <h2 style={{ fontSize: '14px', fontWeight: 'bold', margin: '0', color: '#111827' }}>レイヤー一覧</h2>
         <p style={{ fontSize: '11px', color: '#4b5563', margin: 0, lineHeight: '1.4' }}>
-          💡 画像を枠へ重ねるとグループ一体化されます。
+          💡 ダブルクリックで枠内位置をダイレクト微調整。
         </p>
 
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
           {objectsList.length === 0 ? (
             <p style={{ fontSize: '12px', color: '#9ca3af', textAlign: 'center', marginTop: '20px' }}>要素がありません</p>
           ) : (
-            objectsList.map((obj, index) => {
+            objectsList.map((obj: any, index) => {
               const isSelected = activeObject === obj;
               const isDragging = draggedIndex === index;
               const isTargeted = dragOverIndex === index;
+              const isGroup = !!obj._isMaskGroup;
+              const isExpanded = !!expandedGroups[index];
 
               return (
-                <div
-                  key={index}
-                  draggable={true}
-                  onDragStart={(e) => handleDragStart(e, index)}
-                  onDragOver={(e) => handleDragOver(e, index)}
-                  onDragLeave={() => setDragOverIndex(null)}
-                  onDragEnd={handleDragEnd}
-                  onDrop={(e) => handleDrop(e, index)}
-                  onClick={() => {
-                    if (fabricCanvas) {
-                      fabricCanvas.setActiveObject(obj);
-                      fabricCanvas.renderAll();
-                    }
-                  }}
-                  style={{
-                    padding: '10px 12px',
-                    fontSize: '12px',
-                    borderRadius: '6px',
-                    border: '2px dashed',
-                    borderColor: isTargeted ? '#2563eb' : isSelected ? '#000000' : '#e5e7eb',
-                    backgroundColor: isTargeted ? '#eff6ff' : isSelected ? '#f3f4f6' : '#ffffff',
-                    opacity: isDragging ? 0.4 : 1,
-                    fontWeight: isSelected ? 'bold' : 'normal',
-                    cursor: 'grab',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    userSelect: 'none',
-                  }}
-                >
-                  <span style={{ pointerEvents: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {getObjectLabel(obj)}
-                  </span>
-                  <span style={{ pointerEvents: 'none', fontSize: '12px', color: '#9ca3af' }}>☰</span>
+                <div key={index} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  <div
+                    draggable={true}
+                    onDragStart={(e) => handleDragStart(e, index)}
+                    onDragOver={(e) => handleDragOver(e, index)}
+                    onDragLeave={() => setDragOverIndex(null)}
+                    onDragEnd={handleDragEnd}
+                    onDrop={(e) => handleDrop(e, index)}
+                    onClick={() => {
+                      if (fabricCanvas) {
+                        fabricCanvas.setActiveObject(obj);
+                        fabricCanvas.renderAll();
+                      }
+                    }}
+                    style={{
+                      padding: '8px 10px',
+                      fontSize: '12px',
+                      borderRadius: '6px',
+                      border: '2px dashed',
+                      borderColor: isTargeted ? '#2563eb' : isSelected ? '#000000' : '#e5e7eb',
+                      backgroundColor: isTargeted ? '#eff6ff' : isSelected ? '#f3f4f6' : '#ffffff',
+                      opacity: isDragging ? 0.4 : 1,
+                      fontWeight: isSelected ? 'bold' : 'normal',
+                      cursor: 'grab',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      userSelect: 'none',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}>
+                      {isGroup && (
+                        <span
+                          onClick={(e) => toggleGroupExpand(index, e)}
+                          style={{ cursor: 'pointer', fontSize: '10px', padding: '2px 4px', color: '#6b7280' }}
+                        >
+                          {isExpanded ? '▼' : '▶'}
+                        </span>
+                      )}
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {getObjectLabel(obj)}
+                      </span>
+                    </div>
+                    <span style={{ fontSize: '12px', color: '#9ca3af' }}>☰</span>
+                  </div>
+
+                  {/* グループの展開（中身のレイヤー） */}
+                  {isGroup && isExpanded && (
+                    <div style={{ marginLeft: '16px', display: 'flex', flexDirection: 'column', gap: '4px', borderLeft: '2px solid #e5e7eb', paddingLeft: '8px' }}>
+                      <div
+                        onClick={() => {
+                          if (fabricCanvas) {
+                            enterMaskEditMode(fabricCanvas, obj);
+                          }
+                        }}
+                        style={{
+                          padding: '4px 8px',
+                          fontSize: '11px',
+                          borderRadius: '4px',
+                          backgroundColor: '#f9fafb',
+                          border: '1px solid #e5e7eb',
+                          cursor: 'pointer',
+                          color: '#374151',
+                        }}
+                      >
+                        🖼 中身の画像（調整）
+                      </div>
+                      <div
+                        style={{
+                          padding: '4px 8px',
+                          fontSize: '11px',
+                          borderRadius: '4px',
+                          backgroundColor: '#f9fafb',
+                          border: '1px solid #e5e7eb',
+                          color: '#6b7280',
+                        }}
+                      >
+                        🔲 マスク枠
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })
           )}
         </div>
       </div>
-
-      {/* マスク微調整ポップアップモーダル */}
-      {isModalOpen && (
-        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div style={{ backgroundColor: '#ffffff', padding: '20px', borderRadius: '12px', width: '440px', display: 'flex', flexDirection: 'column', gap: '14px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)' }}>
-            <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 'bold', color: '#111827' }}>✂️ マスクの範囲・画像位置の微調整</h3>
-            <p style={{ margin: 0, fontSize: '12px', color: '#4b5563' }}>赤破線の枠に対して、画像をドラッグ移動・拡大縮小してください。</p>
-
-            <div style={{ display: 'flex', justifyContent: 'center', border: '1px solid #d1d5db', borderRadius: '8px', overflow: 'hidden' }}>
-              <canvas ref={modalCanvasRef} />
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '6px' }}>
-              <button
-                onClick={() => setIsModalOpen(false)}
-                style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #d1d5db', backgroundColor: '#ffffff', cursor: 'pointer', fontSize: '12px' }}
-              >
-                キャンセル
-              </button>
-              <button
-                onClick={saveModalAdjustment}
-                style={{ padding: '8px 16px', borderRadius: '6px', border: 'none', backgroundColor: '#000000', color: '#ffffff', fontWeight: 'bold', cursor: 'pointer', fontSize: '12px' }}
-              >
-                決定（微調整を反映）
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
