@@ -55,7 +55,7 @@ export default function App() {
   const [activeObject, setActiveObject] = useState<fabric.Object | null>(null);
 
   // ドラッグ＆ドロップ状態
-  const draggedIndexRef = useRef<number | null>(null);
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   // マスク微調整モーダル状態
@@ -204,7 +204,6 @@ export default function App() {
       const maskInfo: MaskData = editingImage._maskData;
       const center = { x: 200, y: 200 };
 
-      // ガイド枠線作成
       let guideShape: fabric.Object;
       if (maskInfo.shapeType === 'circle') {
         guideShape = new fabric.Circle({
@@ -237,7 +236,6 @@ export default function App() {
         });
       }
 
-      // プレビュー表示用画像作成
       const previewImg = new fabric.Image(editingImage.getElement(), {
         left: center.x + (editingImage._maskOffsetX || 0),
         top: center.y + (editingImage._maskOffsetY || 0),
@@ -469,24 +467,34 @@ export default function App() {
     }
   };
 
-  // ドラッグ＆ドロップ処理
-  const handleDragStart = (e: React.DragEvent, index: number) => {
-    draggedIndexRef.current = index;
+  // ドラッグ＆ドロップ処理 (HTML5 Drag & Drop 改良版)
+  const handleDragStart = (e: React.DragEvent<HTMLDivElement>, index: number) => {
+    setDraggedIndex(index);
     e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(index));
   };
 
-  const handleDragOver = (e: React.DragEvent, index: number) => {
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>, index: number) => {
     e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
     if (dragOverIndex !== index) {
       setDragOverIndex(index);
     }
   };
 
-  const handleDrop = (e: React.DragEvent, dropIndex: number) => {
+  const handleDragEnd = () => {
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>, dropIndex: number) => {
     e.preventDefault();
+    e.stopPropagation();
+
+    const fromIndex = draggedIndex;
+    setDraggedIndex(null);
     setDragOverIndex(null);
 
-    const fromIndex = draggedIndexRef.current;
     if (fromIndex === null || !fabricCanvas || fromIndex === dropIndex) return;
 
     const draggedObj = objectsList[fromIndex] as any;
@@ -508,7 +516,6 @@ export default function App() {
     }
 
     refreshObjectsList(fabricCanvas);
-    draggedIndexRef.current = null;
   };
 
   // 微調整モーダルで決定された結果をキャンバスへ反映
@@ -760,7 +767,7 @@ export default function App() {
       <div style={{ width: '240px', backgroundColor: '#ffffff', borderLeft: '1px solid #e5e7eb', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px', boxSizing: 'border-box' }}>
         <h2 style={{ fontSize: '14px', fontWeight: 'bold', margin: '0', color: '#111827' }}>レイヤー一覧</h2>
         <p style={{ fontSize: '11px', color: '#4b5563', margin: 0, lineHeight: '1.4' }}>
-          💡 画像を四角・丸枠に重ねると型抜きされます。<br />型抜き後も「微調整」で位置やサイズを変更可能です。
+          💡 レイヤーをドラッグして上下を並び替えられます。<br />画像を枠に重ねると型抜きされます。
         </p>
 
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -769,6 +776,7 @@ export default function App() {
           ) : (
             objectsList.map((obj, index) => {
               const isSelected = activeObject === obj;
+              const isDragging = draggedIndex === index;
               const isTargeted = dragOverIndex === index;
 
               return (
@@ -778,6 +786,7 @@ export default function App() {
                   onDragStart={(e) => handleDragStart(e, index)}
                   onDragOver={(e) => handleDragOver(e, index)}
                   onDragLeave={() => setDragOverIndex(null)}
+                  onDragEnd={handleDragEnd}
                   onDrop={(e) => handleDrop(e, index)}
                   onClick={() => {
                     if (fabricCanvas) {
@@ -792,6 +801,7 @@ export default function App() {
                     border: '2px dashed',
                     borderColor: isTargeted ? '#2563eb' : isSelected ? '#000000' : '#e5e7eb',
                     backgroundColor: isTargeted ? '#eff6ff' : isSelected ? '#f3f4f6' : '#ffffff',
+                    opacity: isDragging ? 0.4 : 1,
                     fontWeight: isSelected ? 'bold' : 'normal',
                     cursor: 'grab',
                     display: 'flex',
