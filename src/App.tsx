@@ -1,12 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as fabric from 'fabric';
-import { Type, Image as ImageIcon, Square, Circle, Download, Trash2 } from 'lucide-react';
 
 // 用紙サイズの比率設定 (px換算)
 const PAPER_SIZES = {
-  A4: { width: 595, height: 842, label: 'A4' },
-  A3: { width: 842, height: 1191, label: 'A3' },
-  SQUARE: { width: 600, height: 600, label: 'スクエア' },
+  A4: { width: 420, height: 595, label: 'A4' },
+  A3: { width: 500, height: 707, label: 'A3' },
+  SQUARE: { width: 500, height: 500, label: 'スクエア' },
 };
 
 // カラー上質紙の背景色サンプル
@@ -54,14 +53,14 @@ export default function App() {
     }
   };
 
-  // テキスト追加（黒固定）
+  // テキスト追加
   const addText = () => {
     if (!fabricCanvas) return;
     const text = new fabric.IText('ZUTOMAYO', {
-      left: 100,
-      top: 100,
+      left: 50,
+      top: 50,
       fontFamily: 'sans-serif',
-      fontSize: 40,
+      fontSize: 36,
       fontWeight: 'bold',
       fill: '#000000',
     });
@@ -69,12 +68,12 @@ export default function App() {
     fabricCanvas.setActiveObject(text);
   };
 
-  // 枠線（長方形）追加
+  // 四角枠線追加
   const addRectangle = () => {
     if (!fabricCanvas) return;
     const rect = new fabric.Rect({
       left: 50,
-      top: 50,
+      top: 120,
       width: 200,
       height: 150,
       fill: 'transparent',
@@ -84,12 +83,12 @@ export default function App() {
     fabricCanvas.add(rect);
   };
 
-  // 円追加
+  // 円枠線追加
   const addCircle = () => {
     if (!fabricCanvas) return;
     const circle = new fabric.Circle({
-      left: 150,
-      top: 150,
+      left: 100,
+      top: 100,
       radius: 60,
       fill: 'transparent',
       stroke: '#000000',
@@ -98,7 +97,7 @@ export default function App() {
     fabricCanvas.add(circle);
   };
 
-  // 画像アップロード & モノクロ2値化（しきい値処理）
+  // 画像アップロード & モノクロ2値化
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !fabricCanvas) return;
@@ -108,7 +107,6 @@ export default function App() {
       const imgObj = new Image();
       imgObj.src = event.target?.result as string;
       imgObj.onload = () => {
-        // 画像を白黒1bit（しきい値）変換するCanvas処理
         const tempCanvas = document.createElement('canvas');
         const ctx = tempCanvas.getContext('2d');
         tempCanvas.width = imgObj.width;
@@ -119,26 +117,24 @@ export default function App() {
           const imgData = ctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
           const data = imgData.data;
 
-          // 輝度を計算して黒(#000000)と透明(#00000000)に分離
           for (let i = 0; i < data.length; i += 4) {
             const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-            const threshold = 128; // しきい値
-            if (avg < threshold) {
-              data[i] = 0;     // R
-              data[i + 1] = 0; // G
-              data[i + 2] = 0; // B
-              data[i + 3] = 255; // 完全不透明（黒）
+            if (avg < 128) {
+              data[i] = 0;
+              data[i + 1] = 0;
+              data[i + 2] = 0;
+              data[i + 3] = 255;
             } else {
-              data[i + 3] = 0; // 完全透明
+              data[i + 3] = 0;
             }
           }
           ctx.putImageData(imgData, 0, 0);
 
           const fabricImg = new fabric.Image(tempCanvas, {
-            left: 100,
-            top: 100,
+            left: 50,
+            top: 50,
           });
-          fabricImg.scaleToWidth(300);
+          fabricImg.scaleToWidth(200);
           fabricCanvas.add(fabricImg);
         }
       };
@@ -155,25 +151,20 @@ export default function App() {
     fabricCanvas.renderAll();
   };
 
-  // 印刷用データ出力（背景透明・高解像度PNG）
+  // 印刷用データ出力
   const exportForPrint = () => {
     if (!fabricCanvas) return;
-
-    // 1. 背景色を一時的に透明にする
     fabricCanvas.backgroundColor = 'transparent';
     fabricCanvas.renderAll();
 
-    // 2. 3倍スケール（約300dpi高解像度）でPNG出力
     const dataUrl = fabricCanvas.toDataURL({
       format: 'png',
       multiplier: 3,
     });
 
-    // 3. 元の作業用背景色に戻す
     fabricCanvas.backgroundColor = paperColor;
     fabricCanvas.renderAll();
 
-    // 4. ダウンロードリンクの発行
     const link = document.createElement('a');
     link.download = `print_data_${selectedSize}.png`;
     link.href = dataUrl;
@@ -181,24 +172,30 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen bg-gray-100 font-sans">
-      {/* ツールバー */}
-      <div className="w-80 bg-white border-r p-6 flex flex-col gap-6 shadow-sm overflow-y-auto">
-        <h1 className="text-xl font-bold text-gray-800">レトロチラシ作成ツール</h1>
+    <div style={{ display: 'flex', height: '100vh', width: '100vw', fontFamily: 'sans-serif', backgroundColor: '#f3f4f6', margin: 0, padding: 0, overflow: 'hidden' }}>
+      {/* サイドバー（操作パネル） */}
+      <div style={{ width: '320px', backgroundColor: '#ffffff', borderRight: '1px solid #e5e7eb', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px', boxSizing: 'border-box', overflowY: 'auto' }}>
+        <h1 style={{ fontSize: '18px', fontWeight: 'bold', margin: '0 0 10px 0', color: '#111827' }}>レトロチラシ作成ツール</h1>
 
-        {/* 1. サイズ選択 */}
+        {/* 1. 用紙サイズ */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">1. 用紙サイズ</label>
-          <div className="grid grid-cols-3 gap-2">
+          <label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', color: '#374151', marginBottom: '8px' }}>1. 用紙サイズ</label>
+          <div style={{ display: 'flex', gap: '8px' }}>
             {(Object.keys(PAPER_SIZES) as Array<keyof typeof PAPER_SIZES>).map((sizeKey) => (
               <button
                 key={sizeKey}
                 onClick={() => setSelectedSize(sizeKey)}
-                className={`py-2 text-sm rounded border ${
-                  selectedSize === sizeKey
-                    ? 'bg-black text-white border-black'
-                    : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
-                }`}
+                style={{
+                  flex: 1,
+                  padding: '8px 0',
+                  fontSize: '13px',
+                  borderRadius: '6px',
+                  border: '1px solid #d1d5db',
+                  cursor: 'pointer',
+                  backgroundColor: selectedSize === sizeKey ? '#000000' : '#ffffff',
+                  color: selectedSize === sizeKey ? '#ffffff' : '#374151',
+                  fontWeight: selectedSize === sizeKey ? 'bold' : 'normal',
+                }}
               >
                 {PAPER_SIZES[sizeKey].label}
               </button>
@@ -206,16 +203,22 @@ export default function App() {
           </div>
         </div>
 
-        {/* 2. 用紙カラー（プレビュー用） */}
+        {/* 2. 用紙カラー */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">2. 用紙カラー（プレビュー）</label>
-          <div className="grid grid-cols-4 gap-2">
+          <label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', color: '#374151', marginBottom: '8px' }}>2. 用紙カラー（プレビュー）</label>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
             {PAPER_COLORS.map((c) => (
               <button
                 key={c.name}
                 onClick={() => handleColorChange(c.color)}
-                className="w-12 h-12 rounded-full border-2 border-gray-200 shadow-inner flex items-center justify-center transition-transform hover:scale-105"
-                style={{ backgroundColor: c.color }}
+                style={{
+                  width: '44px',
+                  height: '44px',
+                  borderRadius: '50%',
+                  border: paperColor === c.color ? '3px solid #000' : '1px solid #d1d5db',
+                  backgroundColor: c.color,
+                  cursor: 'pointer',
+                }}
                 title={c.name}
               />
             ))}
@@ -224,56 +227,45 @@ export default function App() {
 
         {/* 3. 素材追加 */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">3. 素材を追加</label>
-          <div className="flex flex-col gap-2">
-            <button
-              onClick={addText}
-              className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded border border-gray-300"
-            >
-              <Type size={18} /> テキストを追加
-            </button>
-            <button
-              onClick={addRectangle}
-              className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded border border-gray-300"
-            >
-              <Square size={18} /> 四角枠線を追加
-            </button>
-            <button
-              onClick={addCircle}
-              className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded border border-gray-300"
-            >
-              <Circle size={18} /> 円枠線を追加
-            </button>
-            <label className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded border border-gray-300 cursor-pointer">
-              <ImageIcon size={18} /> 画像を追加（モノクロ自動変換）
-              <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+          <label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', color: '#374151', marginBottom: '8px' }}>3. 素材を追加</label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <button onClick={addText} style={btnStyle}>＋ テキストを追加</button>
+            <button onClick={addRectangle} style={btnStyle}>＋ 四角枠線を追加</button>
+            <button onClick={addCircle} style={btnStyle}>＋ 円枠線を追加</button>
+            <label style={{ ...btnStyle, textAlign: 'center', cursor: 'pointer' }}>
+              📷 画像を追加（モノクロ自動変換）
+              <input type="file" accept="image/*" onChange={handleImageUpload} style={{ display: 'none' }} />
             </label>
           </div>
         </div>
 
-        {/* 編集・削除ボタン */}
-        <div className="mt-auto flex flex-col gap-2">
-          <button
-            onClick={deleteSelected}
-            className="flex items-center justify-center gap-2 px-4 py-2 bg-red-50 text-red-600 hover:bg-red-100 rounded border border-red-200"
-          >
-            <Trash2 size={18} /> 選択した要素を削除
+        {/* 削除・出力ボタン */}
+        <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <button onClick={deleteSelected} style={{ ...btnStyle, color: '#dc2626', borderColor: '#fca5a5', backgroundColor: '#fef2f2' }}>
+            🗑 選択した要素を削除
           </button>
-          <button
-            onClick={exportForPrint}
-            className="flex items-center justify-center gap-2 px-4 py-3 bg-black text-white hover:bg-gray-800 rounded shadow font-bold"
-          >
-            <Download size={18} /> 印刷用データ出力 (PNG)
+          <button onClick={exportForPrint} style={{ padding: '12px', backgroundColor: '#000000', color: '#ffffff', border: 'none', borderRadius: '6px', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer' }}>
+            ⬇ 印刷用データ出力 (PNG)
           </button>
         </div>
       </div>
 
-      {/* エディタ領域 (Canvas) */}
-      <div className="flex-1 flex items-center justify-center p-8 overflow-auto">
-        <div className="border border-gray-300 shadow-2xl bg-white">
+      {/* キャンバスエリア */}
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyCenter: 'center', padding: '20px', overflow: 'auto', justifyContent: 'center' }}>
+        <div style={{ boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)', border: '1px solid #d1d5db', lineHeight: 0 }}>
           <canvas ref={canvasRef} />
         </div>
       </div>
     </div>
   );
 }
+
+const btnStyle: React.CSSProperties = {
+  padding: '10px',
+  fontSize: '13px',
+  backgroundColor: '#f9fafb',
+  border: '1px solid #d1d5db',
+  borderRadius: '6px',
+  cursor: 'pointer',
+  textAlign: 'left',
+};
