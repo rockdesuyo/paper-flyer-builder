@@ -56,6 +56,10 @@ export default function App() {
   const [objectsList, setObjectsList] = useState<fabric.Object[]>([]);
   const [activeObject, setActiveObject] = useState<fabric.Object | null>(null);
 
+  // 履歴（Undo）管理
+  const historyRef = useRef<string[]>([]);
+  const isRedoingRef = useRef<boolean>(false);
+
   // ドラッグ＆ドロップ状態
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
@@ -65,6 +69,31 @@ export default function App() {
   const [editingGroup, setEditingGroup] = useState<any>(null);
 
   const guideLinesRef = useRef<fabric.Line[]>([]);
+
+  // 状態の保存（Undo用）
+  const saveHistory = (canvas: fabric.Canvas) => {
+    if (isRedoingRef.current) return;
+    const json = JSON.stringify(canvas.toDatalessJSON(['_isMaskGroup', '_maskData', '_maskedImage', '_frameShape', '_originalImg', '_maskOffsetX', '_maskOffsetY']));
+    historyRef.current.push(json);
+    if (historyRef.current.length > 30) {
+      historyRef.current.shift();
+    }
+  };
+
+  // 1つ前に戻す（Undo）
+  const undo = () => {
+    if (!fabricCanvas || historyRef.current.length <= 1) return;
+
+    isRedoingRef.current = true;
+    historyRef.current.pop(); // 現在の状態を捨てる
+    const prevState = historyRef.current[historyRef.current.length - 1];
+
+    fabricCanvas.loadFromJSON(prevState, () => {
+      fabricCanvas.renderAll();
+      refreshObjectsList(fabricCanvas);
+      isRedoingRef.current = false;
+    });
+  };
 
   // レイヤー一覧の同期
   const refreshObjectsList = (canvas: fabric.Canvas) => {
@@ -150,8 +179,10 @@ export default function App() {
       canvas.renderAll();
     });
 
-    canvas.on('object:modified', clearGuides);
-    canvas.on('selection:cleared', clearGuides);
+    canvas.on('object:modified', () => {
+      clearGuides();
+      saveHistory(canvas);
+    });
 
     const handleSelection = () => {
       const activeObj = canvas.getActiveObject() as any;
@@ -184,15 +215,74 @@ export default function App() {
       refreshObjectsList(canvas);
     });
 
-    canvas.on('object:added', () => refreshObjectsList(canvas));
-    canvas.on('object:removed', () => refreshObjectsList(canvas));
+    canvas.on('object:added', () => {
+      refreshObjectsList(canvas);
+      saveHistory(canvas);
+    });
+    canvas.on('object:removed', () => {
+      refreshObjectsList(canvas);
+      saveHistory(canvas);
+    });
 
     setFabricCanvas(canvas);
+    saveHistory(canvas);
 
     return () => {
       canvas.dispose();
     };
   }, [selectedSize]);
+
+  // キーボードショートカット（Undo ＆ 矢印キー移動）
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!fabricCanvas) return;
+
+      const activeEl = document.activeElement;
+      if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'SELECT' || activeEl.tagName === 'TEXTAREA')) {
+        return;
+      }
+
+      // 1. Ctrl+Z / Cmd+Z でUndo
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        undo();
+        return;
+      }
+
+      const activeObj = fabricCanvas.getActiveObject();
+      if (!activeObj) return;
+
+      // 2. 矢印キーで移動
+      const step = e.shiftKey ? 10 : 1;
+      let moved = false;
+
+      if (e.key === 'ArrowLeft') {
+        activeObj.set('left', (activeObj.left || 0) - step);
+        moved = true;
+      } else if (e.key === 'ArrowRight') {
+        activeObj.set('left', (activeObj.left || 0) + step);
+        moved = true;
+      } else if (e.key === 'ArrowUp') {
+        activeObj.set('top', (activeObj.top || 0) - step);
+        moved = true;
+      } else if (e.key === 'ArrowDown') {
+        activeObj.set('top', (activeObj.top || 0) + step);
+        moved = true;
+      }
+
+      if (moved) {
+        e.preventDefault();
+        activeObj.setCoords();
+        fabricCanvas.renderAll();
+        saveHistory(fabricCanvas);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [fabricCanvas]);
 
   // モーダル用キャンバスの初期化
   useEffect(() => {
@@ -266,6 +356,7 @@ export default function App() {
     if (fabricCanvas) {
       fabricCanvas.backgroundColor = color;
       fabricCanvas.renderAll();
+      saveHistory(fabricCanvas);
     }
   };
 
@@ -328,6 +419,7 @@ export default function App() {
           activeObj.set('strokeWidth', num);
         }
         fabricCanvas.renderAll();
+        saveHistory(fabricCanvas);
       }
     }
   };
@@ -340,6 +432,7 @@ export default function App() {
       if (activeObj && activeObj.type === 'i-text') {
         (activeObj as fabric.IText).set('fontSize', num);
         fabricCanvas.renderAll();
+        saveHistory(fabricCanvas);
       }
     }
   };
@@ -351,6 +444,7 @@ export default function App() {
     if (activeObj && activeObj.type === 'i-text') {
       (activeObj as fabric.IText).set('fontFamily', family);
       fabricCanvas.renderAll();
+      saveHistory(fabricCanvas);
     }
   };
 
@@ -420,15 +514,16 @@ export default function App() {
         const newCanvas = applyMonochromeFilter(targetImg._originalImg, newThresh);
         targetImg.setElement(newCanvas);
         fabricCanvas.renderAll();
+        saveHistory(fabricCanvas);
       }
     }
   };
 
-  // 画像と枠線を一体化（グループ化）してマスク適用
-  const createMaskGroup = (imageObj: any, targetShape: fabric.Object, offsetX = 0, offsetY = 0) => {
+  // 画像と枠線を一体化（グループ化）してマスク適用（ズレ不具合修正版）
+  const createMaskGroup = (imageObj: any, targetShape: fabric.Object, offsetX = 0, offsetY = 0, currentGroupPos?: { x: number; y: number }) => {
     if (!fabricCanvas) return;
 
-    const shapeCenter = targetShape.getCenterPoint();
+    const shapeCenter = currentGroupPos || targetShape.getCenterPoint();
     let maskData: MaskData;
     let clipPath: fabric.Object;
     let frameObj: fabric.Object;
@@ -604,6 +699,7 @@ export default function App() {
 
       const targetImg = editingGroup._maskedImage;
       const origShape = editingGroup._frameShape;
+      const groupPos = { x: editingGroup.left, y: editingGroup.top };
 
       targetImg.set({
         scaleX: previewImg.scaleX,
@@ -611,7 +707,7 @@ export default function App() {
       });
 
       fabricCanvas.remove(editingGroup);
-      createMaskGroup(targetImg, origShape, offsetX, offsetY);
+      createMaskGroup(targetImg, origShape, offsetX, offsetY, groupPos);
     }
 
     setIsModalOpen(false);
@@ -817,6 +913,9 @@ export default function App() {
         </div>
 
         <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <button onClick={undo} style={{ ...btnStyle, backgroundColor: '#f3f4f6', color: '#374151', textAlign: 'center' }}>
+            ↩ 元に戻す (Undo)
+          </button>
           <button onClick={deleteSelected} style={{ ...btnStyle, color: '#dc2626', borderColor: '#fca5a5', backgroundColor: '#fef2f2', textAlign: 'center' }}>
             🗑 選択した要素を削除
           </button>
@@ -876,7 +975,7 @@ export default function App() {
                     cursor: 'grab',
                     display: 'flex',
                     alignItems: 'center',
-                    justify: 'space-between',
+                    justifyContent: 'space-between',
                     userSelect: 'none',
                   }}
                 >
