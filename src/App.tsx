@@ -30,6 +30,8 @@ interface MaskData {
   width: number;
   height: number;
   radius: number;
+  stroke: string;
+  strokeWidth: number;
 }
 
 export default function App() {
@@ -60,7 +62,7 @@ export default function App() {
 
   // マスク微調整モーダル状態
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
-  const [editingImage, setEditingImage] = useState<any>(null);
+  const [editingGroup, setEditingGroup] = useState<any>(null);
 
   const guideLinesRef = useRef<fabric.Line[]>([]);
 
@@ -156,7 +158,7 @@ export default function App() {
       setActiveObject(activeObj || null);
       if (activeObj) {
         setSelectedObjectType(activeObj.type);
-        setHasMask(!!activeObj.clipPath);
+        setHasMask(!!activeObj._isMaskGroup);
         if (activeObj.strokeWidth !== undefined) {
           setStrokeWidthInput(String(activeObj.strokeWidth));
         }
@@ -194,14 +196,15 @@ export default function App() {
 
   // モーダル用キャンバスの初期化
   useEffect(() => {
-    if (isModalOpen && modalCanvasRef.current && editingImage) {
+    if (isModalOpen && modalCanvasRef.current && editingGroup) {
       const mCanvas = new fabric.Canvas(modalCanvasRef.current, {
         width: 400,
         height: 400,
         backgroundColor: '#e5e7eb',
       });
 
-      const maskInfo: MaskData = editingImage._maskData;
+      const maskInfo: MaskData = editingGroup._maskData;
+      const targetImg = editingGroup._maskedImage;
       const center = { x: 200, y: 200 };
 
       let guideShape: fabric.Object;
@@ -236,11 +239,11 @@ export default function App() {
         });
       }
 
-      const previewImg = new fabric.Image(editingImage.getElement(), {
-        left: center.x + (editingImage._maskOffsetX || 0),
-        top: center.y + (editingImage._maskOffsetY || 0),
-        scaleX: editingImage.scaleX,
-        scaleY: editingImage.scaleY,
+      const previewImg = new fabric.Image(targetImg.getElement(), {
+        left: center.x + (targetImg._maskOffsetX || 0),
+        top: center.y + (targetImg._maskOffsetY || 0),
+        scaleX: targetImg.scaleX,
+        scaleY: targetImg.scaleY,
         originX: 'center',
         originY: 'center',
       });
@@ -318,7 +321,12 @@ export default function App() {
     if (!isNaN(num) && num >= 0 && fabricCanvas) {
       const activeObj = fabricCanvas.getActiveObject();
       if (activeObj) {
-        activeObj.set('strokeWidth', num);
+        if ((activeObj as any)._isMaskGroup) {
+          const frame = (activeObj as fabric.Group).getObjects().find(o => o.type !== 'image');
+          if (frame) frame.set('strokeWidth', num);
+        } else {
+          activeObj.set('strokeWidth', num);
+        }
         fabricCanvas.renderAll();
       }
     }
@@ -402,27 +410,34 @@ export default function App() {
     if (!fabricCanvas) return;
 
     const activeObj = fabricCanvas.getActiveObject() as any;
-    if (activeObj && activeObj.type === 'image' && activeObj._originalImg) {
-      const newCanvas = applyMonochromeFilter(activeObj._originalImg, newThresh);
-      activeObj.setElement(newCanvas);
-      fabricCanvas.renderAll();
+    if (activeObj) {
+      let targetImg = activeObj;
+      if (activeObj._isMaskGroup) {
+        targetImg = activeObj._maskedImage;
+      }
+
+      if (targetImg && targetImg.type === 'image' && targetImg._originalImg) {
+        const newCanvas = applyMonochromeFilter(targetImg._originalImg, newThresh);
+        targetImg.setElement(newCanvas);
+        fabricCanvas.renderAll();
+      }
     }
   };
 
-  // マスクの適用（情報保持型）
-  const applyMaskToImage = (imageObj: any, targetShape: fabric.Object, offsetX = 0, offsetY = 0) => {
+  // 画像と枠線を一体化（グループ化）してマスク適用
+  const createMaskGroup = (imageObj: any, targetShape: fabric.Object, offsetX = 0, offsetY = 0) => {
     if (!fabricCanvas) return;
 
     const shapeCenter = targetShape.getCenterPoint();
-    imageObj.setPositionByOrigin(shapeCenter, 'center', 'center');
-
     let maskData: MaskData;
     let clipPath: fabric.Object;
+    let frameObj: fabric.Object;
 
     if (targetShape.type === 'circle') {
       const circle = targetShape as fabric.Circle;
       const radius = circle.radius * circle.scaleX;
-      maskData = { shapeType: 'circle', radius, width: radius * 2, height: radius * 2 };
+      maskData = { shapeType: 'circle', radius, width: radius * 2, height: radius * 2, stroke: circle.stroke as string, strokeWidth: circle.strokeWidth };
+
       clipPath = new fabric.Circle({
         radius: radius / imageObj.scaleX,
         originX: 'center',
@@ -430,11 +445,21 @@ export default function App() {
         left: -offsetX / imageObj.scaleX,
         top: -offsetY / imageObj.scaleY,
       });
+
+      frameObj = new fabric.Circle({
+        radius: radius,
+        fill: 'transparent',
+        stroke: circle.stroke,
+        strokeWidth: circle.strokeWidth,
+        originX: 'center',
+        originY: 'center',
+      });
     } else {
       const rect = targetShape as fabric.Rect;
       const w = rect.width * rect.scaleX;
       const h = rect.height * rect.scaleY;
-      maskData = { shapeType: 'rect', width: w, height: h, radius: 0 };
+      maskData = { shapeType: 'rect', width: w, height: h, radius: 0, stroke: rect.stroke as string, strokeWidth: rect.strokeWidth };
+
       clipPath = new fabric.Rect({
         width: w / imageObj.scaleX,
         height: h / imageObj.scaleY,
@@ -443,31 +468,82 @@ export default function App() {
         left: -offsetX / imageObj.scaleX,
         top: -offsetY / imageObj.scaleY,
       });
+
+      frameObj = new fabric.Rect({
+        width: w,
+        height: h,
+        fill: 'transparent',
+        stroke: rect.stroke,
+        strokeWidth: rect.strokeWidth,
+        originX: 'center',
+        originY: 'center',
+      });
     }
 
-    imageObj._maskData = maskData;
+    imageObj.set({
+      originX: 'center',
+      originY: 'center',
+      left: offsetX,
+      top: offsetY,
+      clipPath: clipPath,
+    });
+
     imageObj._maskOffsetX = offsetX;
     imageObj._maskOffsetY = offsetY;
 
-    imageObj.set('clipPath', clipPath);
+    // グループ化
+    const group = new fabric.Group([imageObj, frameObj], {
+      left: shapeCenter.x,
+      top: shapeCenter.y,
+      originX: 'center',
+      originY: 'center',
+    });
+
+    (group as any)._isMaskGroup = true;
+    (group as any)._maskData = maskData;
+    (group as any)._maskedImage = imageObj;
+    (group as any)._frameShape = targetShape;
+
+    fabricCanvas.remove(imageObj);
+    fabricCanvas.remove(targetShape);
+
+    fabricCanvas.add(group);
+    fabricCanvas.setActiveObject(group);
     fabricCanvas.renderAll();
   };
 
-  // マスク解除
+  // マスク（グループ）解除
   const removeMask = () => {
     if (!fabricCanvas) return;
     const activeObj = fabricCanvas.getActiveObject() as any;
-    if (activeObj && activeObj.type === 'image') {
-      activeObj.set('clipPath', undefined);
-      delete activeObj._maskData;
-      delete activeObj._maskOffsetX;
-      delete activeObj._maskOffsetY;
+    if (activeObj && activeObj._isMaskGroup) {
+      const imgObj = activeObj._maskedImage;
+      const shapeObj = activeObj._frameShape;
+
+      imgObj.set({
+        clipPath: undefined,
+        left: activeObj.left,
+        top: activeObj.top,
+      });
+      delete imgObj._maskOffsetX;
+      delete imgObj._maskOffsetY;
+
+      shapeObj.set({
+        left: activeObj.left + 20,
+        top: activeObj.top + 20,
+      });
+
+      fabricCanvas.remove(activeObj);
+      fabricCanvas.add(imgObj);
+      fabricCanvas.add(shapeObj);
+
+      fabricCanvas.setActiveObject(imgObj);
       setHasMask(false);
       fabricCanvas.renderAll();
     }
   };
 
-  // ドラッグ＆ドロップ処理 (HTML5 Drag & Drop 改良版)
+  // ドラッグ＆ドロップ処理
   const handleDragStart = (e: React.DragEvent<HTMLDivElement>, index: number) => {
     setDraggedIndex(index);
     e.dataTransfer.effectAllowed = 'move';
@@ -501,8 +577,7 @@ export default function App() {
     const targetObj = objectsList[dropIndex];
 
     if (draggedObj.type === 'image' && (targetObj.type === 'rect' || targetObj.type === 'circle')) {
-      applyMaskToImage(draggedObj, targetObj);
-      fabricCanvas.setActiveObject(draggedObj);
+      createMaskGroup(draggedObj, targetObj);
       setHasMask(true);
     } else {
       const currentCanvasObjs = fabricCanvas.getObjects().filter((o) => o.type !== 'line');
@@ -520,29 +595,23 @@ export default function App() {
 
   // 微調整モーダルで決定された結果をキャンバスへ反映
   const saveModalAdjustment = () => {
-    if (!modalCanvas || !editingImage || !fabricCanvas) return;
+    if (!modalCanvas || !editingGroup || !fabricCanvas) return;
 
     const previewImg = modalCanvas.getObjects().find((o) => o.type === 'image') as fabric.Image;
     if (previewImg) {
       const offsetX = previewImg.left - 200;
       const offsetY = previewImg.top - 200;
 
-      editingImage.set({
+      const targetImg = editingGroup._maskedImage;
+      const origShape = editingGroup._frameShape;
+
+      targetImg.set({
         scaleX: previewImg.scaleX,
         scaleY: previewImg.scaleY,
       });
 
-      const fakeShape: any = {
-        type: editingImage._maskData.shapeType,
-        getCenterPoint: () => editingImage.getCenterPoint(),
-        scaleX: 1,
-        scaleY: 1,
-        radius: editingImage._maskData.radius,
-        width: editingImage._maskData.width,
-        height: editingImage._maskData.height,
-      };
-
-      applyMaskToImage(editingImage, fakeShape, offsetX, offsetY);
+      fabricCanvas.remove(editingGroup);
+      createMaskGroup(targetImg, origShape, offsetX, offsetY);
     }
 
     setIsModalOpen(false);
@@ -582,7 +651,8 @@ export default function App() {
     link.click();
   };
 
-  const getObjectLabel = (obj: fabric.Object) => {
+  const getObjectLabel = (obj: any) => {
+    if (obj._isMaskGroup) return '🖼️🔲 マスク画像グループ';
     if (obj.type === 'i-text') {
       const txt = (obj as fabric.IText).text || '';
       return `🔤 ${txt.slice(0, 10)}${txt.length > 10 ? '...' : ''}`;
@@ -709,7 +779,7 @@ export default function App() {
             </div>
           </div>
 
-          {selectedObjectType === 'image' && (
+          {(selectedObjectType === 'image' || hasMask) && (
             <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '8px', marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <div>
                 <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>モノクロ濃淡: {threshold}</span>
@@ -727,7 +797,7 @@ export default function App() {
                 <>
                   <button
                     onClick={() => {
-                      setEditingImage(activeObject);
+                      setEditingGroup(activeObject);
                       setIsModalOpen(true);
                     }}
                     style={{ ...btnStyle, backgroundColor: '#2563eb', color: '#ffffff', border: 'none', textAlign: 'center', fontWeight: 'bold' }}
@@ -738,7 +808,7 @@ export default function App() {
                     onClick={removeMask}
                     style={{ ...btnStyle, backgroundColor: '#f3f4f6', color: '#374151', textAlign: 'center' }}
                   >
-                    🔓 マスク（型抜き）を解除
+                    🔓 マスク（グループ）を解除
                   </button>
                 </>
               )}
@@ -767,7 +837,7 @@ export default function App() {
       <div style={{ width: '240px', backgroundColor: '#ffffff', borderLeft: '1px solid #e5e7eb', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px', boxSizing: 'border-box' }}>
         <h2 style={{ fontSize: '14px', fontWeight: 'bold', margin: '0', color: '#111827' }}>レイヤー一覧</h2>
         <p style={{ fontSize: '11px', color: '#4b5563', margin: 0, lineHeight: '1.4' }}>
-          💡 レイヤーをドラッグして上下を並び替えられます。<br />画像を枠に重ねると型抜きされます。
+          💡 画像を枠へ重ねるとグループ一体化されます。
         </p>
 
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
