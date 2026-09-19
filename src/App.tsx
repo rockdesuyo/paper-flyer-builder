@@ -20,11 +20,25 @@ const PAPER_COLORS = [
   { name: 'ホワイト', color: '#ffffff' },
 ];
 
+// フォント一覧
+const FONTS = [
+  { name: 'ゴシック体', family: 'sans-serif' },
+  { name: '明朝体', family: 'serif' },
+  { name: '等幅（レトロ風）', family: 'monospace' },
+  { name: 'インパクト（太字）', family: 'Impact, sans-serif' },
+];
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [fabricCanvas, setFabricCanvas] = useState<fabric.Canvas | null>(null);
   const [selectedSize, setSelectedSize] = useState<keyof typeof PAPER_SIZES>('A4');
   const [paperColor, setPaperColor] = useState<string>('#ff944d');
+
+  // 選択中のオブジェクトプロパティ
+  const [strokeWidth, setStrokeWidth] = useState<number>(4);
+  const [fontSize, setFontSize] = useState<number>(32);
+  const [fontFamily, setFontFamily] = useState<string>('sans-serif');
+  const [selectedObjectType, setSelectedObjectType] = useState<string | null>(null);
 
   // Canvasの初期化
   useEffect(() => {
@@ -36,6 +50,23 @@ export default function App() {
       height: size.height,
       backgroundColor: paperColor,
     });
+
+    // 選択イベントの監視
+    const handleSelection = () => {
+      const activeObj = canvas.getActiveObject();
+      if (activeObj) {
+        setSelectedObjectType(activeObj.type);
+        if (activeObj.strokeWidth) setStrokeWidth(activeObj.strokeWidth);
+        if ((activeObj as fabric.IText).fontSize) setFontSize((activeObj as fabric.IText).fontSize);
+        if ((activeObj as fabric.IText).fontFamily) setFontFamily((activeObj as fabric.IText).fontFamily);
+      } else {
+        setSelectedObjectType(null);
+      }
+    };
+
+    canvas.on('selection:created', handleSelection);
+    canvas.on('selection:updated', handleSelection);
+    canvas.on('selection:cleared', () => setSelectedObjectType(null));
 
     setFabricCanvas(canvas);
 
@@ -53,48 +84,82 @@ export default function App() {
     }
   };
 
-  // テキスト追加
-  const addText = () => {
+  // テキスト追加（見出し / 本文）
+  const addText = (isTitle: boolean) => {
     if (!fabricCanvas) return;
-    const text = new fabric.IText('ZUTOMAYO', {
+    const text = new fabric.IText(isTitle ? '見出しタイトル' : 'ここへ本文テキストを入力します。', {
       left: 50,
       top: 50,
-      fontFamily: 'sans-serif',
-      fontSize: 36,
-      fontWeight: 'bold',
+      fontFamily: fontFamily,
+      fontSize: isTitle ? 36 : 18,
+      fontWeight: isTitle ? 'bold' : 'normal',
       fill: '#000000',
     });
     fabricCanvas.add(text);
     fabricCanvas.setActiveObject(text);
   };
 
-  // 四角枠線追加
+  // 図形追加
   const addRectangle = () => {
     if (!fabricCanvas) return;
     const rect = new fabric.Rect({
       left: 50,
       top: 120,
-      width: 200,
-      height: 150,
+      width: 150,
+      height: 100,
       fill: 'transparent',
       stroke: '#000000',
-      strokeWidth: 4,
+      strokeWidth: strokeWidth,
     });
     fabricCanvas.add(rect);
+    fabricCanvas.setActiveObject(rect);
   };
 
-  // 円枠線追加
   const addCircle = () => {
     if (!fabricCanvas) return;
     const circle = new fabric.Circle({
       left: 100,
       top: 100,
-      radius: 60,
+      radius: 50,
       fill: 'transparent',
       stroke: '#000000',
-      strokeWidth: 4,
+      strokeWidth: strokeWidth,
     });
     fabricCanvas.add(circle);
+    fabricCanvas.setActiveObject(circle);
+  };
+
+  // 選択中の線の太さ変更
+  const updateStrokeWidth = (width: number) => {
+    setStrokeWidth(width);
+    if (!fabricCanvas) return;
+    const activeObj = fabricCanvas.getActiveObject();
+    if (activeObj) {
+      activeObj.set('strokeWidth', width);
+      fabricCanvas.renderAll();
+    }
+  };
+
+  // 選択中のフォントサイズ変更
+  const updateFontSize = (size: number) => {
+    setFontSize(size);
+    if (!fabricCanvas) return;
+    const activeObj = fabricCanvas.getActiveObject();
+    if (activeObj && activeObj.type === 'i-text') {
+      (activeObj as fabric.IText).set('fontSize', size);
+      fabricCanvas.renderAll();
+    }
+  };
+
+  // 選択中のフォント変更
+  const updateFontFamily = (family: string) => {
+    setFontFamily(family);
+    if (!fabricCanvas) return;
+    const activeObj = fabricCanvas.getActiveObject();
+    if (activeObj && activeObj.type === 'i-text') {
+      (activeObj as fabric.IText).set('fontFamily', family);
+      fabricCanvas.renderAll();
+    }
   };
 
   // 画像アップロード & モノクロ2値化
@@ -136,10 +201,41 @@ export default function App() {
           });
           fabricImg.scaleToWidth(200);
           fabricCanvas.add(fabricImg);
+          fabricCanvas.setActiveObject(fabricImg);
         }
       };
     };
     reader.readAsDataURL(file);
+  };
+
+  // 画像のトリミング（正方形・円形マスク）
+  const cropImage = (type: 'rect' | 'circle') => {
+    if (!fabricCanvas) return;
+    const activeObj = fabricCanvas.getActiveObject() as fabric.Image;
+    if (!activeObj || activeObj.type !== 'image') return;
+
+    const width = activeObj.width * activeObj.scaleX;
+    const height = activeObj.height * activeObj.scaleY;
+    const minSize = Math.min(width, height);
+
+    let clipPath: fabric.Object;
+    if (type === 'circle') {
+      clipPath = new fabric.Circle({
+        radius: minSize / (2 * activeObj.scaleX),
+        originX: 'center',
+        originY: 'center',
+      });
+    } else {
+      clipPath = new fabric.Rect({
+        width: minSize / activeObj.scaleX,
+        height: minSize / activeObj.scaleY,
+        originX: 'center',
+        originY: 'center',
+      });
+    }
+
+    activeObj.set('clipPath', clipPath);
+    fabricCanvas.renderAll();
   };
 
   // 選択要素の削除
@@ -151,9 +247,14 @@ export default function App() {
     fabricCanvas.renderAll();
   };
 
-  // 印刷用データ出力
+  // 印刷用データ出力（ファイル名指定）
   const exportForPrint = () => {
     if (!fabricCanvas) return;
+
+    const defaultName = `flyer_${selectedSize}`;
+    const fileName = prompt('保存するファイル名を入力してください:', defaultName);
+    if (!fileName) return;
+
     fabricCanvas.backgroundColor = 'transparent';
     fabricCanvas.renderAll();
 
@@ -166,7 +267,7 @@ export default function App() {
     fabricCanvas.renderAll();
 
     const link = document.createElement('a');
-    link.download = `print_data_${selectedSize}.png`;
+    link.download = `${fileName}.png`;
     link.href = dataUrl;
     link.click();
   };
@@ -174,12 +275,12 @@ export default function App() {
   return (
     <div style={{ display: 'flex', height: '100vh', width: '100vw', fontFamily: 'sans-serif', backgroundColor: '#f3f4f6', margin: 0, padding: 0, overflow: 'hidden' }}>
       {/* サイドバー（操作パネル） */}
-      <div style={{ width: '320px', backgroundColor: '#ffffff', borderRight: '1px solid #e5e7eb', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px', boxSizing: 'border-box', overflowY: 'auto' }}>
-        <h1 style={{ fontSize: '18px', fontWeight: 'bold', margin: '0 0 10px 0', color: '#111827' }}>レトロチラシ作成ツール</h1>
+      <div style={{ width: '340px', backgroundColor: '#ffffff', borderRight: '1px solid #e5e7eb', padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px', boxSizing: 'border-box', overflowY: 'auto' }}>
+        <h1 style={{ fontSize: '18px', fontWeight: 'bold', margin: '0', color: '#111827' }}>レトロチラシ作成ツール</h1>
 
         {/* 1. 用紙サイズ */}
         <div>
-          <label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', color: '#374151', marginBottom: '8px' }}>1. 用紙サイズ</label>
+          <label style={labelStyle}>1. 用紙サイズ</label>
           <div style={{ display: 'flex', gap: '8px' }}>
             {(Object.keys(PAPER_SIZES) as Array<keyof typeof PAPER_SIZES>).map((sizeKey) => (
               <button
@@ -205,15 +306,15 @@ export default function App() {
 
         {/* 2. 用紙カラー */}
         <div>
-          <label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', color: '#374151', marginBottom: '8px' }}>2. 用紙カラー（プレビュー）</label>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
+          <label style={labelStyle}>2. 用紙カラー（プレビュー）</label>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
             {PAPER_COLORS.map((c) => (
               <button
                 key={c.name}
                 onClick={() => handleColorChange(c.color)}
                 style={{
-                  width: '44px',
-                  height: '44px',
+                  width: '40px',
+                  height: '40px',
                   borderRadius: '50%',
                   border: paperColor === c.color ? '3px solid #000' : '1px solid #d1d5db',
                   backgroundColor: c.color,
@@ -227,21 +328,77 @@ export default function App() {
 
         {/* 3. 素材追加 */}
         <div>
-          <label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', color: '#374151', marginBottom: '8px' }}>3. 素材を追加</label>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <button onClick={addText} style={btnStyle}>＋ テキストを追加</button>
-            <button onClick={addRectangle} style={btnStyle}>＋ 四角枠線を追加</button>
-            <button onClick={addCircle} style={btnStyle}>＋ 円枠線を追加</button>
-            <label style={{ ...btnStyle, textAlign: 'center', cursor: 'pointer' }}>
-              📷 画像を追加（モノクロ自動変換）
+          <label style={labelStyle}>3. 素材を追加</label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button onClick={() => addText(true)} style={{ ...btnStyle, flex: 1 }}>＋ 見出し追加</button>
+              <button onClick={() => addText(false)} style={{ ...btnStyle, flex: 1 }}>＋ 本文追加</button>
+            </div>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button onClick={addRectangle} style={{ ...btnStyle, flex: 1 }}>＋ 四角枠線</button>
+              <button onClick={addCircle} style={{ ...btnStyle, flex: 1 }}>＋ 円枠線</button>
+            </div>
+            <label style={{ ...btnStyle, textAlign: 'center', cursor: 'pointer', marginTop: '2px' }}>
+              📷 画像を追加（モノクロ変換）
               <input type="file" accept="image/*" onChange={handleImageUpload} style={{ display: 'none' }} />
             </label>
           </div>
         </div>
 
+        {/* 4. 選択中オブジェクトの調整（コンテキストメニュー） */}
+        <div style={{ backgroundColor: '#f9fafb', padding: '12px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
+          <label style={{ ...labelStyle, marginBottom: '8px' }}>4. 選択中パーツの編集</label>
+          
+          {/* 線の太さ調整 */}
+          <div style={{ marginBottom: '10px' }}>
+            <span style={{ fontSize: '12px', color: '#6b7280' }}>線の太さ: {strokeWidth}px</span>
+            <input
+              type="range"
+              min="1"
+              max="20"
+              value={strokeWidth}
+              onChange={(e) => updateStrokeWidth(Number(e.target.value))}
+              style={{ width: '100%' }}
+            />
+          </div>
+
+          {/* フォント調整 */}
+          <div style={{ marginBottom: '10px' }}>
+            <span style={{ fontSize: '12px', color: '#6b7280' }}>フォント・文字サイズ</span>
+            <select
+              value={fontFamily}
+              onChange={(e) => updateFontFamily(e.target.value)}
+              style={{ width: '100%', padding: '6px', fontSize: '12px', borderRadius: '4px', border: '1px solid #d1d5db', marginBottom: '6px' }}
+            >
+              {FONTS.map((f) => (
+                <option key={f.name} value={f.family}>{f.name}</option>
+              ))}
+            </select>
+            <input
+              type="range"
+              min="12"
+              max="100"
+              value={fontSize}
+              onChange={(e) => updateFontSize(Number(e.target.value))}
+              style={{ width: '100%' }}
+            />
+          </div>
+
+          {/* 画像のトリミング */}
+          {selectedObjectType === 'image' && (
+            <div>
+              <span style={{ fontSize: '12px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>画像をトリミング</span>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button onClick={() => cropImage('rect')} style={{ ...btnStyle, flex: 1, padding: '6px', fontSize: '11px' }}>正方形で切抜</button>
+                <button onClick={() => cropImage('circle')} style={{ ...btnStyle, flex: 1, padding: '6px', fontSize: '11px' }}>円形で切抜</button>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* 削除・出力ボタン */}
-        <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          <button onClick={deleteSelected} style={{ ...btnStyle, color: '#dc2626', borderColor: '#fca5a5', backgroundColor: '#fef2f2' }}>
+        <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <button onClick={deleteSelected} style={{ ...btnStyle, color: '#dc2626', borderColor: '#fca5a5', backgroundColor: '#fef2f2', textAlign: 'center' }}>
             🗑 選択した要素を削除
           </button>
           <button onClick={exportForPrint} style={{ padding: '12px', backgroundColor: '#000000', color: '#ffffff', border: 'none', borderRadius: '6px', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer' }}>
@@ -251,7 +408,7 @@ export default function App() {
       </div>
 
       {/* キャンバスエリア */}
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyCenter: 'center', padding: '20px', overflow: 'auto', justifyContent: 'center' }}>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', overflow: 'auto' }}>
         <div style={{ boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)', border: '1px solid #d1d5db', lineHeight: 0 }}>
           <canvas ref={canvasRef} />
         </div>
@@ -260,10 +417,18 @@ export default function App() {
   );
 }
 
-const btnStyle: React.CSSProperties = {
-  padding: '10px',
+const labelStyle: React.CSSProperties = {
+  display: 'block',
   fontSize: '13px',
-  backgroundColor: '#f9fafb',
+  fontWeight: 'bold',
+  color: '#374151',
+  marginBottom: '6px',
+};
+
+const btnStyle: React.CSSProperties = {
+  padding: '8px',
+  fontSize: '12px',
+  backgroundColor: '#ffffff',
   border: '1px solid #d1d5db',
   borderRadius: '6px',
   cursor: 'pointer',
