@@ -27,7 +27,6 @@ const FONTS = [
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-
   const [fabricCanvas, setFabricCanvas] = useState<fabric.Canvas | null>(null);
 
   const [selectedSize, setSelectedSize] = useState<keyof typeof PAPER_SIZES>('A4');
@@ -45,23 +44,45 @@ export default function App() {
   // レイヤー管理
   const [objectsList, setObjectsList] = useState<fabric.Object[]>([]);
   const [activeObject, setActiveObject] = useState<fabric.Object | null>(null);
-  const [expandedGroups, setExpandedGroups] = useState<{ [key: number]: boolean }>({});
 
   // 履歴（Undo）管理
   const historyRef = useRef<string[]>([]);
-  const isRedoingRef = useRef<boolean>(false);
+  const isUndoRedoRef = useRef<boolean>(false);
 
   // ドラッグ＆ドロップ状態
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   const guideLinesRef = useRef<fabric.Line[]>([]);
-  const currentEditingGroupRef = useRef<any>(null);
+  const maskEditingCtxRef = useRef<{
+    group: fabric.Group;
+    imgObj: fabric.Image;
+    frameObj: fabric.Object;
+  } | null>(null);
+
+  // レイヤー一覧の同期
+  const refreshObjectsList = (canvas: fabric.Canvas) => {
+    const objs = canvas.getObjects().filter((obj) => obj.type !== 'line' && !(obj as any)._isTempFrame);
+    setObjectsList([...objs].reverse());
+  };
 
   // 状態の保存（Undo用）
   const saveHistory = (canvas: fabric.Canvas) => {
-    if (isRedoingRef.current) return;
-    const json = JSON.stringify(canvas.toDatalessJSON(['_isMaskGroup', '_maskData', '_maskedImage', '_frameShape', '_originalImg', '_maskOffsetX', '_maskOffsetY']));
+    if (isUndoRedoRef.current || maskEditingCtxRef.current) return;
+    const json = JSON.stringify(
+      canvas.toDatalessJSON([
+        '_isMaskGroup',
+        '_maskedImage',
+        '_frameShape',
+        '_originalImg',
+        '_maskFrameData',
+      ])
+    );
+
+    if (historyRef.current.length > 0 && historyRef.current[historyRef.current.length - 1] === json) {
+      return;
+    }
+
     historyRef.current.push(json);
     if (historyRef.current.length > 30) {
       historyRef.current.shift();
@@ -72,25 +93,71 @@ export default function App() {
   const undo = () => {
     if (!fabricCanvas || historyRef.current.length <= 1) return;
 
-    if (currentEditingGroupRef.current) {
+    if (maskEditingCtxRef.current) {
       exitMaskEditMode();
     }
 
-    isRedoingRef.current = true;
+    isUndoRedoRef.current = true;
     historyRef.current.pop();
     const prevState = historyRef.current[historyRef.current.length - 1];
 
     fabricCanvas.loadFromJSON(prevState, () => {
       fabricCanvas.renderAll();
       refreshObjectsList(fabricCanvas);
-      isRedoingRef.current = false;
+      isUndoRedoRef.current = false;
     });
   };
 
-  // レイヤー一覧の同期
-  const refreshObjectsList = (canvas: fabric.Canvas) => {
-    const objs = canvas.getObjects().filter((obj) => obj.type !== 'line');
-    setObjectsList([...objs].reverse());
+  // 正確な Mask / ClipPath の生成計算（ローカル行列計算）
+  const updateImageClipPath = (img: fabric.Image, frameData: any) => {
+    let clipShape: fabric.Object;
+
+    if (frameData.type === 'circle') {
+      clipShape = new fabric.Circle({
+        radius: frameData.radius,
+        originX: 'center',
+        originY: 'center',
+      });
+    } else {
+      clipShape = new fabric.Rect({
+        width: frameData.width,
+        height: frameData.height,
+        originX: 'center',
+        originY: 'center',
+      });
+    }
+
+    // 枠線のワールド変換行列を取得
+    const frameMatrix = fabric.util.composeMatrix({
+      translateX: frameData.left,
+      translateY: frameData.top,
+      scaleX: frameData.scaleX || 1,
+      scaleY: frameData.scaleY || 1,
+      angle: frameData.angle || 0,
+      skewX: 0,
+      skewY: 0,
+    });
+
+    // 画像のワールド変換行列の逆行列を取得
+    const imgMatrix = img.calcTransformMatrix();
+    const invertedImgMatrix = fabric.util.invertTransform(imgMatrix);
+
+    // 画像のローカル座標系に対する枠線の相対行列を計算
+    const relativeMatrix = fabric.util.multiplyTransformMatrices(invertedImgMatrix, frameMatrix);
+    const options = fabric.util.qrDecompose(relativeMatrix);
+
+    clipShape.set({
+      left: options.translateX,
+      top: options.translateY,
+      scaleX: options.scaleX,
+      scaleY: options.scaleY,
+      angle: options.angle,
+      skewX: options.skewX,
+      skewY: options.skewY,
+      absolutePositioned: false,
+    });
+
+    img.set('clipPath', clipShape);
   };
 
   useEffect(() => {
@@ -102,6 +169,8 @@ export default function App() {
       height: size.height,
       backgroundColor: paperColor,
     });
+
+    historyRef.current = [];
 
     const clearGuides = () => {
       guideLinesRef.current.forEach((line) => canvas.remove(line));
@@ -140,7 +209,7 @@ export default function App() {
       }
 
       canvas.getObjects().forEach((obj) => {
-        if (obj === target || obj.type === 'line') return;
+        if (obj === target || obj.type === 'line' || (obj as any)._isTempFrame) return;
 
         const objBBox = obj.getBoundingRect();
         const objCenter = obj.getCenterPoint();
@@ -151,20 +220,6 @@ export default function App() {
         } else if (Math.abs(targetCenter.x - objCenter.x) < snapThreshold) {
           target.setPositionByOrigin(new fabric.Point(objCenter.x, targetCenter.y), 'center', 'center');
           drawGuideLine(objCenter.x, 0, objCenter.x, size.height);
-        } else if (Math.abs(targetBBox.left + targetBBox.width - (objBBox.left + objBBox.width)) < snapThreshold) {
-          target.set('left', objBBox.left + objBBox.width - targetBBox.width + (target.left - targetBBox.left));
-          drawGuideLine(objBBox.left + objBBox.width, 0, objBBox.left + objBBox.width, size.height);
-        }
-
-        if (Math.abs(targetBBox.top - objBBox.top) < snapThreshold) {
-          target.set('top', objBBox.top + (target.top - targetBBox.top));
-          drawGuideLine(0, objBBox.top, size.width, objBBox.top);
-        } else if (Math.abs(targetCenter.y - objCenter.y) < snapThreshold) {
-          target.setPositionByOrigin(new fabric.Point(targetCenter.x, objCenter.y), 'center', 'center');
-          drawGuideLine(0, objCenter.y, size.width, objCenter.y);
-        } else if (Math.abs(targetBBox.top + targetBBox.height - (objBBox.top + objBBox.height)) < snapThreshold) {
-          target.set('top', objBBox.top + objBBox.height - targetBBox.height + (target.top - targetBBox.top));
-          drawGuideLine(0, objBBox.top + objBBox.height, size.width, objBBox.top + objBBox.height);
         }
       });
 
@@ -188,10 +243,6 @@ export default function App() {
       const activeObj = canvas.getActiveObject() as any;
       setActiveObject(activeObj || null);
 
-      if (currentEditingGroupRef.current && activeObj !== currentEditingGroupRef.current._maskedImage) {
-        exitMaskEditMode();
-      }
-
       if (activeObj) {
         setSelectedObjectType(activeObj.type);
         setHasMask(!!activeObj._isMaskGroup);
@@ -214,9 +265,6 @@ export default function App() {
     canvas.on('selection:created', handleSelection);
     canvas.on('selection:updated', handleSelection);
     canvas.on('selection:cleared', () => {
-      if (currentEditingGroupRef.current) {
-        exitMaskEditMode();
-      }
       setActiveObject(null);
       setSelectedObjectType(null);
       setHasMask(false);
@@ -240,7 +288,7 @@ export default function App() {
     };
   }, [selectedSize]);
 
-  // キーボード操作（Undo / 矢印キーで1px・10px微調整）
+  // キーボード操作（Undo / 矢印キー微調整）
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!fabricCanvas) return;
@@ -290,210 +338,177 @@ export default function App() {
     };
   }, [fabricCanvas]);
 
-  // マスク内部の直接編集モードに入る
-  const enterMaskEditMode = (canvas: fabric.Canvas, group: any) => {
-    currentEditingGroupRef.current = group;
-    setIsEditingMaskMode(true);
-
-    const imgObj = group._maskedImage;
-    const origShape = group._frameShape;
-
-    // グループを分解して画像のみ選択可能にする
-    const groupCenter = group.getCenterPoint();
-    const offsetX = imgObj._maskOffsetX || 0;
-    const offsetY = imgObj._maskOffsetY || 0;
-
-    canvas.remove(group);
-
-    // くり抜き（clipPath）
-    const clipPath = createClipPath(origShape, imgObj, offsetX, offsetY);
-    imgObj.set({
-      clipPath: clipPath,
-      left: groupCenter.x + offsetX,
-      top: groupCenter.y + offsetY,
-      originX: 'center',
-      originY: 'center',
-    });
-
-    // 枠線をプレビュー描画
-    let frameObj: fabric.Object;
-    if (origShape.type === 'circle') {
-      const radius = origShape.radius * (origShape.scaleX || 1);
-      frameObj = new fabric.Circle({
-        radius: radius,
-        fill: 'transparent',
-        stroke: origShape.stroke || '#000',
-        strokeWidth: origShape.strokeWidth || 4,
-        originX: 'center',
-        originY: 'center',
-        left: groupCenter.x,
-        top: groupCenter.y,
-        selectable: false,
-        evented: false,
-      });
-    } else {
-      const w = origShape.width * (origShape.scaleX || 1);
-      const h = origShape.height * (origShape.scaleY || 1);
-      frameObj = new fabric.Rect({
-        width: w,
-        height: h,
-        fill: 'transparent',
-        stroke: origShape.stroke || '#000',
-        strokeWidth: origShape.strokeWidth || 4,
-        originX: 'center',
-        originY: 'center',
-        left: groupCenter.x,
-        top: groupCenter.y,
-        selectable: false,
-        evented: false,
-      });
-    }
-
-    (frameObj as any)._isTempFrame = true;
-
-    canvas.add(imgObj);
-    canvas.add(frameObj);
-    canvas.setActiveObject(imgObj);
-
-    // 画像が移動した際にクリッピング領域を動的に更新
-    imgObj.on('moving', () => {
-      const currentOffsetX = imgObj.left - groupCenter.x;
-      const currentOffsetY = imgObj.top - groupCenter.y;
-      imgObj.set('clipPath', createClipPath(origShape, imgObj, currentOffsetX, currentOffsetY));
-      canvas.renderAll();
-    });
-
-    imgObj.on('scaling', () => {
-      const currentOffsetX = imgObj.left - groupCenter.x;
-      const currentOffsetY = imgObj.top - groupCenter.y;
-      imgObj.set('clipPath', createClipPath(origShape, imgObj, currentOffsetX, currentOffsetY));
-      canvas.renderAll();
-    });
-
-    canvas.renderAll();
-  };
-
-  // 直接編集モードを抜けてグループに復帰
-  const exitMaskEditMode = () => {
-    if (!fabricCanvas || !currentEditingGroupRef.current) return;
-
-    const group = currentEditingGroupRef.current;
-    const imgObj = group._maskedImage;
-    const origShape = group._frameShape;
-
-    const tempFrame = fabricCanvas.getObjects().find((o) => (o as any)._isTempFrame);
-    if (tempFrame) fabricCanvas.remove(tempFrame);
-
-    const groupCenter = { x: tempFrame ? tempFrame.left : group.left, y: tempFrame ? tempFrame.top : group.top };
-    const offsetX = imgObj.left - groupCenter.x;
-    const offsetY = imgObj.top - groupCenter.y;
-
-    imgObj.off('moving');
-    imgObj.off('scaling');
-
-    fabricCanvas.remove(imgObj);
-
-    createMaskGroup(imgObj, origShape, offsetX, offsetY, groupCenter);
-
-    currentEditingGroupRef.current = null;
-    setIsEditingMaskMode(false);
-  };
-
-  const createClipPath = (targetShape: fabric.Object, imageObj: any, offsetX: number, offsetY: number) => {
-    const scaleX = imageObj.scaleX || 1;
-    const scaleY = imageObj.scaleY || 1;
-
-    if (targetShape.type === 'circle') {
-      const circle = targetShape as fabric.Circle;
-      const radius = circle.radius * (circle.scaleX || 1);
-
-      return new fabric.Circle({
-        radius: radius / scaleX,
-        originX: 'center',
-        originY: 'center',
-        left: -offsetX / scaleX,
-        top: -offsetY / scaleY,
-      });
-    } else {
-      const rect = targetShape as fabric.Rect;
-      const w = rect.width * (rect.scaleX || 1);
-      const h = rect.height * (rect.scaleY || 1);
-
-      return new fabric.Rect({
-        width: w / scaleX,
-        height: h / scaleY,
-        originX: 'center',
-        originY: 'center',
-        left: -offsetX / scaleX,
-        top: -offsetY / scaleY,
-      });
-    }
-  };
-
-  // 画像と枠線を一体化（グループ化）
-  const createMaskGroup = (imageObj: any, targetShape: fabric.Object, offsetX = 0, offsetY = 0, currentGroupPos?: { x: number; y: number }) => {
+  // マスク（画像＋枠線）の生成
+  const createMaskGroup = (imageObj: fabric.Image, targetShape: fabric.Object) => {
     if (!fabricCanvas) return;
 
-    const shapeCenter = currentGroupPos || targetShape.getCenterPoint();
-    let clipPath = createClipPath(targetShape, imageObj, offsetX, offsetY);
-    let frameObj: fabric.Object;
+    const frameData = {
+      type: targetShape.type,
+      width: targetShape.width * (targetShape.scaleX || 1),
+      height: targetShape.height * (targetShape.scaleY || 1),
+      radius: (targetShape as fabric.Circle).radius ? (targetShape as fabric.Circle).radius * (targetShape.scaleX || 1) : 0,
+      left: targetShape.left,
+      top: targetShape.top,
+      scaleX: 1,
+      scaleY: 1,
+      angle: targetShape.angle || 0,
+      stroke: targetShape.stroke || '#000000',
+      strokeWidth: targetShape.strokeWidth || 4,
+    };
 
-    if (targetShape.type === 'circle') {
-      const circle = targetShape as fabric.Circle;
-      const radius = circle.radius * (circle.scaleX || 1);
+    updateImageClipPath(imageObj, frameData);
 
-      frameObj = new fabric.Circle({
-        radius: radius,
+    let outlineObj: fabric.Object;
+    if (frameData.type === 'circle') {
+      outlineObj = new fabric.Circle({
+        radius: frameData.radius,
         fill: 'transparent',
-        stroke: circle.stroke,
-        strokeWidth: circle.strokeWidth,
+        stroke: frameData.stroke,
+        strokeWidth: frameData.strokeWidth,
+        left: frameData.left,
+        top: frameData.top,
         originX: 'center',
         originY: 'center',
       });
     } else {
-      const rect = targetShape as fabric.Rect;
-      const w = rect.width * (rect.scaleX || 1);
-      const h = rect.height * (rect.scaleY || 1);
-
-      frameObj = new fabric.Rect({
-        width: w,
-        height: h,
+      outlineObj = new fabric.Rect({
+        width: frameData.width,
+        height: frameData.height,
         fill: 'transparent',
-        stroke: rect.stroke,
-        strokeWidth: rect.strokeWidth,
+        stroke: frameData.stroke,
+        strokeWidth: frameData.strokeWidth,
+        left: frameData.left,
+        top: frameData.top,
         originX: 'center',
         originY: 'center',
       });
     }
 
-    imageObj.set({
-      originX: 'center',
-      originY: 'center',
-      left: offsetX,
-      top: offsetY,
-      clipPath: clipPath,
-    });
+    fabricCanvas.remove(imageObj);
+    fabricCanvas.remove(targetShape);
 
-    imageObj._maskOffsetX = offsetX;
-    imageObj._maskOffsetY = offsetY;
-
-    const group = new fabric.Group([imageObj, frameObj], {
-      left: shapeCenter.x,
-      top: shapeCenter.y,
+    const group = new fabric.Group([imageObj, outlineObj], {
+      left: frameData.left,
+      top: frameData.top,
       originX: 'center',
       originY: 'center',
     });
 
     (group as any)._isMaskGroup = true;
     (group as any)._maskedImage = imageObj;
-    (group as any)._frameShape = targetShape;
-
-    fabricCanvas.remove(imageObj);
-    fabricCanvas.remove(targetShape);
+    (group as any)._frameShape = outlineObj;
+    (group as any)._maskFrameData = frameData;
 
     fabricCanvas.add(group);
     fabricCanvas.setActiveObject(group);
     fabricCanvas.renderAll();
+    saveHistory(fabricCanvas);
+  };
+
+  // マスク内部の直接編集モードに入る
+  const enterMaskEditMode = (canvas: fabric.Canvas, group: any) => {
+    if (!group._isMaskGroup || maskEditingCtxRef.current) return;
+
+    setIsEditingMaskMode(true);
+
+    const imgObj = group._maskedImage as fabric.Image;
+    const frameObj = group._frameShape as fabric.Object;
+
+    // グループ解体して個別に配置
+    canvas.remove(group);
+
+    const frameData = {
+      type: frameObj.type,
+      width: frameObj.width * (frameObj.scaleX || 1),
+      height: frameObj.height * (frameObj.scaleY || 1),
+      radius: (frameObj as fabric.Circle).radius ? (frameObj as fabric.Circle).radius * (frameObj.scaleX || 1) : 0,
+      left: group.left,
+      top: group.top,
+      scaleX: 1,
+      scaleY: 1,
+      angle: group.angle || 0,
+      stroke: frameObj.stroke || '#000000',
+      strokeWidth: frameObj.strokeWidth || 4,
+    };
+
+    // ガイド用固定枠線
+    let guideFrame: fabric.Object;
+    if (frameData.type === 'circle') {
+      guideFrame = new fabric.Circle({
+        radius: frameData.radius,
+        fill: 'transparent',
+        stroke: frameData.stroke,
+        strokeWidth: frameData.strokeWidth,
+        left: frameData.left,
+        top: frameData.top,
+        originX: 'center',
+        originY: 'center',
+        selectable: false,
+        evented: false,
+      });
+    } else {
+      guideFrame = new fabric.Rect({
+        width: frameData.width,
+        height: frameData.height,
+        fill: 'transparent',
+        stroke: frameData.stroke,
+        strokeWidth: frameData.strokeWidth,
+        left: frameData.left,
+        top: frameData.top,
+        originX: 'center',
+        originY: 'center',
+        selectable: false,
+        evented: false,
+      });
+    }
+
+    (guideFrame as any)._isTempFrame = true;
+
+    updateImageClipPath(imgObj, frameData);
+
+    canvas.add(imgObj);
+    canvas.add(guideFrame);
+    canvas.setActiveObject(imgObj);
+
+    maskEditingCtxRef.current = {
+      group,
+      imgObj,
+      frameObj: guideFrame,
+    };
+
+    // 移動・拡大・回転中のリアルタイムマスク更新
+    const handleTransform = () => {
+      updateImageClipPath(imgObj, frameData);
+      canvas.renderAll();
+    };
+
+    imgObj.on('moving', handleTransform);
+    imgObj.on('scaling', handleTransform);
+    imgObj.on('rotating', handleTransform);
+
+    canvas.renderAll();
+  };
+
+  // 直接編集モードを抜けてグループ化に復帰
+  const exitMaskEditMode = () => {
+    if (!fabricCanvas || !maskEditingCtxRef.current) return;
+
+    const { imgObj, frameObj } = maskEditingCtxRef.current;
+
+    imgObj.off('moving');
+    imgObj.off('scaling');
+    imgObj.off('rotating');
+
+    const tempFrame = fabricCanvas.getObjects().find((o) => (o as any)._isTempFrame);
+    if (tempFrame) fabricCanvas.remove(tempFrame);
+
+    fabricCanvas.remove(imgObj);
+
+    maskEditingCtxRef.current = null;
+    setIsEditingMaskMode(false);
+
+    // 再度グループを作成
+    createMaskGroup(imgObj, frameObj);
   };
 
   // マスク（グループ）解除
@@ -504,13 +519,11 @@ export default function App() {
       const imgObj = activeObj._maskedImage;
       const shapeObj = activeObj._frameShape;
 
+      imgObj.set('clipPath', undefined);
       imgObj.set({
-        clipPath: undefined,
         left: activeObj.left,
         top: activeObj.top,
       });
-      delete imgObj._maskOffsetX;
-      delete imgObj._maskOffsetY;
 
       shapeObj.set({
         left: activeObj.left + 20,
@@ -524,6 +537,7 @@ export default function App() {
       fabricCanvas.setActiveObject(imgObj);
       setHasMask(false);
       fabricCanvas.renderAll();
+      saveHistory(fabricCanvas);
     }
   };
 
@@ -555,13 +569,15 @@ export default function App() {
     if (!fabricCanvas) return;
     const sw = parseInt(strokeWidthInput, 10) || 4;
     const rect = new fabric.Rect({
-      left: 80,
+      left: 120,
       top: 120,
       width: 160,
       height: 160,
       fill: 'transparent',
       stroke: '#000000',
       strokeWidth: sw,
+      originX: 'center',
+      originY: 'center',
     });
     fabricCanvas.add(rect);
     fabricCanvas.setActiveObject(rect);
@@ -571,12 +587,14 @@ export default function App() {
     if (!fabricCanvas) return;
     const sw = parseInt(strokeWidthInput, 10) || 4;
     const circle = new fabric.Circle({
-      left: 100,
-      top: 100,
+      left: 150,
+      top: 150,
       radius: 80,
       fill: 'transparent',
       stroke: '#000000',
       strokeWidth: sw,
+      originX: 'center',
+      originY: 'center',
     });
     fabricCanvas.add(circle);
     fabricCanvas.setActiveObject(circle);
@@ -662,8 +680,10 @@ export default function App() {
       imgObj.onload = () => {
         const convertedCanvas = applyMonochromeFilter(imgObj, threshold);
         const fabricImg = new fabric.Image(convertedCanvas, {
-          left: 60,
-          top: 60,
+          left: 150,
+          top: 150,
+          originX: 'center',
+          originY: 'center',
         });
         (fabricImg as any)._originalImg = imgObj;
 
@@ -695,7 +715,7 @@ export default function App() {
     }
   };
 
-  // ドラッグ＆ドロップ処理（レイヤー並べ替え ＆ 重ね合わせでマスク化）
+  // ドラッグ＆ドロップ処理
   const handleDragStart = (e: React.DragEvent<HTMLDivElement>, index: number) => {
     setDraggedIndex(index);
     e.dataTransfer.effectAllowed = 'move';
@@ -740,6 +760,7 @@ export default function App() {
         fabricCanvas.moveObjectTo(draggedObj, realTargetIdx);
       }
       fabricCanvas.renderAll();
+      saveHistory(fabricCanvas);
     }
 
     refreshObjectsList(fabricCanvas);
@@ -751,12 +772,13 @@ export default function App() {
     activeObjects.forEach((obj) => fabricCanvas.remove(obj));
     fabricCanvas.discardActiveObject();
     fabricCanvas.renderAll();
+    saveHistory(fabricCanvas);
   };
 
   const exportForPrint = () => {
     if (!fabricCanvas) return;
 
-    if (currentEditingGroupRef.current) {
+    if (maskEditingCtxRef.current) {
       exitMaskEditMode();
     }
 
@@ -793,11 +815,6 @@ export default function App() {
     if (obj.type === 'circle') return '⚪ 円枠';
     if (obj.type === 'image') return '🖼 画像';
     return 'パーツ';
-  };
-
-  const toggleGroupExpand = (index: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setExpandedGroups((prev) => ({ ...prev, [index]: !prev[index] }));
   };
 
   return (
@@ -986,9 +1003,6 @@ export default function App() {
       {/* 右レイヤーパネル */}
       <div style={{ width: '250px', backgroundColor: '#ffffff', borderLeft: '1px solid #e5e7eb', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px', boxSizing: 'border-box' }}>
         <h2 style={{ fontSize: '14px', fontWeight: 'bold', margin: '0', color: '#111827' }}>レイヤー一覧</h2>
-        <p style={{ fontSize: '11px', color: '#4b5563', margin: 0, lineHeight: '1.4' }}>
-          💡 ダブルクリックで枠内位置をダイレクト微調整。
-        </p>
 
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
           {objectsList.length === 0 ? (
@@ -998,8 +1012,6 @@ export default function App() {
               const isSelected = activeObject === obj;
               const isDragging = draggedIndex === index;
               const isTargeted = dragOverIndex === index;
-              const isGroup = !!obj._isMaskGroup;
-              const isExpanded = !!expandedGroups[index];
 
               return (
                 <div key={index} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
@@ -1032,57 +1044,11 @@ export default function App() {
                       userSelect: 'none',
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}>
-                      {isGroup && (
-                        <span
-                          onClick={(e) => toggleGroupExpand(index, e)}
-                          style={{ cursor: 'pointer', fontSize: '10px', padding: '2px 4px', color: '#6b7280' }}
-                        >
-                          {isExpanded ? '▼' : '▶'}
-                        </span>
-                      )}
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {getObjectLabel(obj)}
-                      </span>
-                    </div>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {getObjectLabel(obj)}
+                    </span>
                     <span style={{ fontSize: '12px', color: '#9ca3af' }}>☰</span>
                   </div>
-
-                  {/* グループの展開（中身のレイヤー） */}
-                  {isGroup && isExpanded && (
-                    <div style={{ marginLeft: '16px', display: 'flex', flexDirection: 'column', gap: '4px', borderLeft: '2px solid #e5e7eb', paddingLeft: '8px' }}>
-                      <div
-                        onClick={() => {
-                          if (fabricCanvas) {
-                            enterMaskEditMode(fabricCanvas, obj);
-                          }
-                        }}
-                        style={{
-                          padding: '4px 8px',
-                          fontSize: '11px',
-                          borderRadius: '4px',
-                          backgroundColor: '#f9fafb',
-                          border: '1px solid #e5e7eb',
-                          cursor: 'pointer',
-                          color: '#374151',
-                        }}
-                      >
-                        🖼 中身の画像（調整）
-                      </div>
-                      <div
-                        style={{
-                          padding: '4px 8px',
-                          fontSize: '11px',
-                          borderRadius: '4px',
-                          backgroundColor: '#f9fafb',
-                          border: '1px solid #e5e7eb',
-                          color: '#6b7280',
-                        }}
-                      >
-                        🔲 マスク枠
-                      </div>
-                    </div>
-                  )}
                 </div>
               );
             })
