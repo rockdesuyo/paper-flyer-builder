@@ -20,7 +20,6 @@ const PAPER_COLORS = [
   { name: 'ホワイト', color: '#ffffff' },
 ];
 
-// フォント一覧
 const FONTS = [
   { name: 'ゴシック体', family: 'sans-serif' },
   { name: '明朝体', family: 'serif' },
@@ -34,11 +33,15 @@ export default function App() {
   const [selectedSize, setSelectedSize] = useState<keyof typeof PAPER_SIZES>('A4');
   const [paperColor, setPaperColor] = useState<string>('#ff944d');
 
-  // 選択中のオブジェクトプロパティ
+  // 選択中要素のプロパティ
   const [strokeWidth, setStrokeWidth] = useState<number>(4);
   const [fontSize, setFontSize] = useState<number>(32);
   const [fontFamily, setFontFamily] = useState<string>('sans-serif');
+  const [threshold, setThreshold] = useState<number>(128); // モノクロしきい値 (0~255)
   const [selectedObjectType, setSelectedObjectType] = useState<string | null>(null);
+
+  // ガイドライン描画用
+  const guideLinesRef = useRef<fabric.Line[]>([]);
 
   // Canvasの初期化
   useEffect(() => {
@@ -51,7 +54,66 @@ export default function App() {
       backgroundColor: paperColor,
     });
 
-    // 選択イベントの監視
+    // スマートガイド（センタースナップ・位置揃え線）機能
+    const clearGuides = () => {
+      guideLinesRef.current.forEach((line) => canvas.remove(line));
+      guideLinesRef.current = [];
+    };
+
+    const drawGuideLine = (x1: number, y1: number, x2: number, y2: number) => {
+      const line = new fabric.Line([x1, y1, x2, y2], {
+        stroke: '#ff0000',
+        strokeWidth: 1,
+        selectable: false,
+        evented: false,
+        strokeDashArray: [4, 4],
+      });
+      canvas.add(line);
+      guideLinesRef.current.push(line);
+    };
+
+    canvas.on('object:moving', (e) => {
+      clearGuides();
+      const target = e.target;
+      if (!target) return;
+
+      const targetCenter = target.getCenterPoint();
+      const snapThreshold = 6;
+
+      // キャンバスの中央スナップ
+      if (Math.abs(targetCenter.x - size.width / 2) < snapThreshold) {
+        target.setPositionByOrigin(new fabric.Point(size.width / 2, targetCenter.y), 'center', 'center');
+        drawGuideLine(size.width / 2, 0, size.width / 2, size.height);
+      }
+      if (Math.abs(targetCenter.y - size.height / 2) < snapThreshold) {
+        target.setPositionByOrigin(new fabric.Point(targetCenter.x, size.height / 2), 'center', 'center');
+        drawGuideLine(0, size.height / 2, size.width, size.height / 2);
+      }
+
+      // 他のオブジェクトとの位置揃えスナップ
+      canvas.getObjects().forEach((obj) => {
+        if (obj === target || obj.type === 'line') return;
+        const objCenter = obj.getCenterPoint();
+
+        // X軸（左右・中央）の揃え
+        if (Math.abs(targetCenter.x - objCenter.x) < snapThreshold) {
+          target.setPositionByOrigin(new fabric.Point(objCenter.x, targetCenter.y), 'center', 'center');
+          drawGuideLine(objCenter.x, 0, objCenter.x, size.height);
+        }
+        // Y軸（上下・中央）の揃え
+        if (Math.abs(targetCenter.y - objCenter.y) < snapThreshold) {
+          target.setPositionByOrigin(new fabric.Point(targetCenter.x, objCenter.y), 'center', 'center');
+          drawGuideLine(0, objCenter.y, size.width, objCenter.y);
+        }
+      });
+
+      canvas.renderAll();
+    });
+
+    canvas.on('object:modified', clearGuides);
+    canvas.on('selection:cleared', clearGuides);
+
+    // 選択イベント
     const handleSelection = () => {
       const activeObj = canvas.getActiveObject();
       if (activeObj) {
@@ -84,7 +146,7 @@ export default function App() {
     }
   };
 
-  // テキスト追加（見出し / 本文）
+  // テキスト追加
   const addText = (isTitle: boolean) => {
     if (!fabricCanvas) return;
     const text = new fabric.IText(isTitle ? '見出しタイトル' : 'ここへ本文テキストを入力します。', {
@@ -129,7 +191,7 @@ export default function App() {
     fabricCanvas.setActiveObject(circle);
   };
 
-  // 選択中の線の太さ変更
+  // 属性更新
   const updateStrokeWidth = (width: number) => {
     setStrokeWidth(width);
     if (!fabricCanvas) return;
@@ -140,7 +202,6 @@ export default function App() {
     }
   };
 
-  // 選択中のフォントサイズ変更
   const updateFontSize = (size: number) => {
     setFontSize(size);
     if (!fabricCanvas) return;
@@ -151,7 +212,6 @@ export default function App() {
     }
   };
 
-  // 選択中のフォント変更
   const updateFontFamily = (family: string) => {
     setFontFamily(family);
     if (!fabricCanvas) return;
@@ -163,6 +223,33 @@ export default function App() {
   };
 
   // 画像アップロード & モノクロ2値化
+  const applyMonochromeFilter = (imgElement: HTMLImageElement, threshValue: number) => {
+    const tempCanvas = document.createElement('canvas');
+    const ctx = tempCanvas.getContext('2d');
+    tempCanvas.width = imgElement.width;
+    tempCanvas.height = imgElement.height;
+
+    if (ctx) {
+      ctx.drawImage(imgElement, 0, 0);
+      const imgData = ctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+      const data = imgData.data;
+
+      for (let i = 0; i < data.length; i += 4) {
+        const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+        if (avg < threshValue) {
+          data[i] = 0;
+          data[i + 1] = 0;
+          data[i + 2] = 0;
+          data[i + 3] = 255;
+        } else {
+          data[i + 3] = 0;
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+    }
+    return tempCanvas;
+  };
+
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !fabricCanvas) return;
@@ -172,43 +259,36 @@ export default function App() {
       const imgObj = new Image();
       imgObj.src = event.target?.result as string;
       imgObj.onload = () => {
-        const tempCanvas = document.createElement('canvas');
-        const ctx = tempCanvas.getContext('2d');
-        tempCanvas.width = imgObj.width;
-        tempCanvas.height = imgObj.height;
+        const convertedCanvas = applyMonochromeFilter(imgObj, threshold);
+        const fabricImg = new fabric.Image(convertedCanvas, {
+          left: 50,
+          top: 50,
+        });
+        // 元画像をプロパティに保持（後からスライダーで調整用）
+        (fabricImg as any)._originalImg = imgObj;
 
-        if (ctx) {
-          ctx.drawImage(imgObj, 0, 0);
-          const imgData = ctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
-          const data = imgData.data;
-
-          for (let i = 0; i < data.length; i += 4) {
-            const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-            if (avg < 128) {
-              data[i] = 0;
-              data[i + 1] = 0;
-              data[i + 2] = 0;
-              data[i + 3] = 255;
-            } else {
-              data[i + 3] = 0;
-            }
-          }
-          ctx.putImageData(imgData, 0, 0);
-
-          const fabricImg = new fabric.Image(tempCanvas, {
-            left: 50,
-            top: 50,
-          });
-          fabricImg.scaleToWidth(200);
-          fabricCanvas.add(fabricImg);
-          fabricCanvas.setActiveObject(fabricImg);
-        }
+        fabricImg.scaleToWidth(200);
+        fabricCanvas.add(fabricImg);
+        fabricCanvas.setActiveObject(fabricImg);
       };
     };
     reader.readAsDataURL(file);
   };
 
-  // 画像のトリミング（正方形・円形マスク）
+  // 選択画像のモノクロ濃度（しきい値）再調整
+  const updateImageThreshold = (newThresh: number) => {
+    setThreshold(newThresh);
+    if (!fabricCanvas) return;
+
+    const activeObj = fabricCanvas.getActiveObject() as any;
+    if (activeObj && activeObj.type === 'image' && activeObj._originalImg) {
+      const newCanvas = applyMonochromeFilter(activeObj._originalImg, newThresh);
+      activeObj.setElement(newCanvas);
+      fabricCanvas.renderAll();
+    }
+  };
+
+  // 画像のトリミング
   const cropImage = (type: 'rect' | 'circle') => {
     if (!fabricCanvas) return;
     const activeObj = fabricCanvas.getActiveObject() as fabric.Image;
@@ -238,7 +318,7 @@ export default function App() {
     fabricCanvas.renderAll();
   };
 
-  // 選択要素の削除
+  // 削除
   const deleteSelected = () => {
     if (!fabricCanvas) return;
     const activeObjects = fabricCanvas.getActiveObjects();
@@ -247,13 +327,16 @@ export default function App() {
     fabricCanvas.renderAll();
   };
 
-  // 印刷用データ出力（ファイル名指定）
+  // 印刷用データ出力
   const exportForPrint = () => {
     if (!fabricCanvas) return;
 
     const defaultName = `flyer_${selectedSize}`;
     const fileName = prompt('保存するファイル名を入力してください:', defaultName);
     if (!fileName) return;
+
+    // ガイド線を消去してから書き出し
+    guideLinesRef.current.forEach((line) => fabricCanvas.remove(line));
 
     fabricCanvas.backgroundColor = 'transparent';
     fabricCanvas.renderAll();
@@ -274,7 +357,7 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', height: '100vh', width: '100vw', fontFamily: 'sans-serif', backgroundColor: '#f3f4f6', margin: 0, padding: 0, overflow: 'hidden' }}>
-      {/* サイドバー（操作パネル） */}
+      {/* サイドバー */}
       <div style={{ width: '340px', backgroundColor: '#ffffff', borderRight: '1px solid #e5e7eb', padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px', boxSizing: 'border-box', overflowY: 'auto' }}>
         <h1 style={{ fontSize: '18px', fontWeight: 'bold', margin: '0', color: '#111827' }}>レトロチラシ作成ツール</h1>
 
@@ -339,18 +422,18 @@ export default function App() {
               <button onClick={addCircle} style={{ ...btnStyle, flex: 1 }}>＋ 円枠線</button>
             </div>
             <label style={{ ...btnStyle, textAlign: 'center', cursor: 'pointer', marginTop: '2px' }}>
-              📷 画像を追加（モノクロ変換）
+              📷 画像を追加
               <input type="file" accept="image/*" onChange={handleImageUpload} style={{ display: 'none' }} />
             </label>
           </div>
         </div>
 
-        {/* 4. 選択中オブジェクトの調整（コンテキストメニュー） */}
+        {/* 4. 選択中パーツの編集 */}
         <div style={{ backgroundColor: '#f9fafb', padding: '12px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
           <label style={{ ...labelStyle, marginBottom: '8px' }}>4. 選択中パーツの編集</label>
           
           {/* 線の太さ調整 */}
-          <div style={{ marginBottom: '10px' }}>
+          <div style={{ marginBottom: '12px' }}>
             <span style={{ fontSize: '12px', color: '#6b7280' }}>線の太さ: {strokeWidth}px</span>
             <input
               type="range"
@@ -362,9 +445,9 @@ export default function App() {
             />
           </div>
 
-          {/* フォント調整 */}
-          <div style={{ marginBottom: '10px' }}>
-            <span style={{ fontSize: '12px', color: '#6b7280' }}>フォント・文字サイズ</span>
+          {/* フォント指定 & pxでのサイズ数値入力 */}
+          <div style={{ marginBottom: '12px' }}>
+            <span style={{ fontSize: '12px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>フォント・文字サイズ (px)</span>
             <select
               value={fontFamily}
               onChange={(e) => updateFontFamily(e.target.value)}
@@ -374,23 +457,36 @@ export default function App() {
                 <option key={f.name} value={f.family}>{f.name}</option>
               ))}
             </select>
-            <input
-              type="range"
-              min="12"
-              max="100"
-              value={fontSize}
-              onChange={(e) => updateFontSize(Number(e.target.value))}
-              style={{ width: '100%' }}
-            />
+            <div style={{ display: 'flex', items: 'center', gap: '6px' }}>
+              <input
+                type="number"
+                min="8"
+                max="200"
+                value={fontSize}
+                onChange={(e) => updateFontSize(Number(e.target.value))}
+                style={{ width: '80px', padding: '4px 6px', fontSize: '12px', borderRadius: '4px', border: '1px solid #d1d5db' }}
+              />
+              <span style={{ fontSize: '12px', color: '#6b7280', lineHeight: '28px' }}>px</span>
+            </div>
           </div>
 
-          {/* 画像のトリミング */}
+          {/* 画像加工コントロール */}
           {selectedObjectType === 'image' && (
-            <div>
-              <span style={{ fontSize: '12px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>画像をトリミング</span>
+            <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '10px' }}>
+              <span style={{ fontSize: '12px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>モノクロ濃淡（しきい値）: {threshold}</span>
+              <input
+                type="range"
+                min="0"
+                max="255"
+                value={threshold}
+                onChange={(e) => updateImageThreshold(Number(e.target.value))}
+                style={{ width: '100%', marginBottom: '8px' }}
+              />
+
+              <span style={{ fontSize: '12px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>トリミング</span>
               <div style={{ display: 'flex', gap: '6px' }}>
-                <button onClick={() => cropImage('rect')} style={{ ...btnStyle, flex: 1, padding: '6px', fontSize: '11px' }}>正方形で切抜</button>
-                <button onClick={() => cropImage('circle')} style={{ ...btnStyle, flex: 1, padding: '6px', fontSize: '11px' }}>円形で切抜</button>
+                <button onClick={() => cropImage('rect')} style={{ ...btnStyle, flex: 1, padding: '6px', fontSize: '11px', textAlign: 'center' }}>正方形で切抜</button>
+                <button onClick={() => cropImage('circle')} style={{ ...btnStyle, flex: 1, padding: '6px', fontSize: '11px', textAlign: 'center' }}>円形で切抜</button>
               </div>
             </div>
           )}
