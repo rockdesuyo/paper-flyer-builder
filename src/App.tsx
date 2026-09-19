@@ -25,9 +25,20 @@ const FONTS = [
   { name: 'インパクト（太字）', family: 'Impact, sans-serif' },
 ];
 
+interface MaskData {
+  shapeType: 'rect' | 'circle';
+  width: number;
+  height: number;
+  radius: number;
+}
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const modalCanvasRef = useRef<HTMLCanvasElement>(null);
+
   const [fabricCanvas, setFabricCanvas] = useState<fabric.Canvas | null>(null);
+  const [modalCanvas, setModalCanvas] = useState<fabric.Canvas | null>(null);
+
   const [selectedSize, setSelectedSize] = useState<keyof typeof PAPER_SIZES>('A4');
   const [paperColor, setPaperColor] = useState<string>('#ff944d');
 
@@ -37,14 +48,19 @@ export default function App() {
   const [fontFamily, setFontFamily] = useState<string>('sans-serif');
   const [threshold, setThreshold] = useState<number>(128);
   const [selectedObjectType, setSelectedObjectType] = useState<string | null>(null);
+  const [hasMask, setHasMask] = useState<boolean>(false);
 
   // レイヤー管理
   const [objectsList, setObjectsList] = useState<fabric.Object[]>([]);
   const [activeObject, setActiveObject] = useState<fabric.Object | null>(null);
 
-  // ドラッグ＆ドロップ状態 (refとstateを併用してスムーズに)
+  // ドラッグ＆ドロップ状態
   const draggedIndexRef = useRef<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
+  // マスク微調整モーダル状態
+  const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+  const [editingImage, setEditingImage] = useState<any>(null);
 
   const guideLinesRef = useRef<fabric.Line[]>([]);
 
@@ -81,7 +97,7 @@ export default function App() {
       guideLinesRef.current.push(line);
     };
 
-    // スマートガイド（揃え位置スナップ）
+    // スマートガイド機能
     canvas.on('object:moving', (e) => {
       clearGuides();
       const target = e.target;
@@ -91,7 +107,6 @@ export default function App() {
       const targetBBox = target.getBoundingRect();
       const targetCenter = target.getCenterPoint();
 
-      // 用紙中央スナップ
       if (Math.abs(targetCenter.x - size.width / 2) < snapThreshold) {
         target.setPositionByOrigin(new fabric.Point(size.width / 2, targetCenter.y), 'center', 'center');
         drawGuideLine(size.width / 2, 0, size.width / 2, size.height);
@@ -101,14 +116,12 @@ export default function App() {
         drawGuideLine(0, size.height / 2, size.width, size.height / 2);
       }
 
-      // 要素同士のスナップ（左端、中央、右端、上端、下端）
       canvas.getObjects().forEach((obj) => {
         if (obj === target || obj.type === 'line') return;
 
         const objBBox = obj.getBoundingRect();
         const objCenter = obj.getCenterPoint();
 
-        // X軸
         if (Math.abs(targetBBox.left - objBBox.left) < snapThreshold) {
           target.set('left', objBBox.left + (target.left - targetBBox.left));
           drawGuideLine(objBBox.left, 0, objBBox.left, size.height);
@@ -120,7 +133,6 @@ export default function App() {
           drawGuideLine(objBBox.left + objBBox.width, 0, objBBox.left + objBBox.width, size.height);
         }
 
-        // Y軸
         if (Math.abs(targetBBox.top - objBBox.top) < snapThreshold) {
           target.set('top', objBBox.top + (target.top - targetBBox.top));
           drawGuideLine(0, objBBox.top, size.width, objBBox.top);
@@ -140,10 +152,11 @@ export default function App() {
     canvas.on('selection:cleared', clearGuides);
 
     const handleSelection = () => {
-      const activeObj = canvas.getActiveObject();
+      const activeObj = canvas.getActiveObject() as any;
       setActiveObject(activeObj || null);
       if (activeObj) {
         setSelectedObjectType(activeObj.type);
+        setHasMask(!!activeObj.clipPath);
         if (activeObj.strokeWidth !== undefined) {
           setStrokeWidthInput(String(activeObj.strokeWidth));
         }
@@ -155,6 +168,7 @@ export default function App() {
         }
       } else {
         setSelectedObjectType(null);
+        setHasMask(false);
       }
       refreshObjectsList(canvas);
     };
@@ -164,6 +178,7 @@ export default function App() {
     canvas.on('selection:cleared', () => {
       setActiveObject(null);
       setSelectedObjectType(null);
+      setHasMask(false);
       refreshObjectsList(canvas);
     });
 
@@ -176,6 +191,74 @@ export default function App() {
       canvas.dispose();
     };
   }, [selectedSize]);
+
+  // モーダル用キャンバスの初期化
+  useEffect(() => {
+    if (isModalOpen && modalCanvasRef.current && editingImage) {
+      const mCanvas = new fabric.Canvas(modalCanvasRef.current, {
+        width: 400,
+        height: 400,
+        backgroundColor: '#e5e7eb',
+      });
+
+      const maskInfo: MaskData = editingImage._maskData;
+      const center = { x: 200, y: 200 };
+
+      // ガイド枠線作成
+      let guideShape: fabric.Object;
+      if (maskInfo.shapeType === 'circle') {
+        guideShape = new fabric.Circle({
+          radius: maskInfo.radius,
+          fill: 'rgba(255, 0, 0, 0.1)',
+          stroke: '#ef4444',
+          strokeWidth: 2,
+          strokeDashArray: [4, 4],
+          originX: 'center',
+          originY: 'center',
+          left: center.x,
+          top: center.y,
+          selectable: false,
+          evented: false,
+        });
+      } else {
+        guideShape = new fabric.Rect({
+          width: maskInfo.width,
+          height: maskInfo.height,
+          fill: 'rgba(255, 0, 0, 0.1)',
+          stroke: '#ef4444',
+          strokeWidth: 2,
+          strokeDashArray: [4, 4],
+          originX: 'center',
+          originY: 'center',
+          left: center.x,
+          top: center.y,
+          selectable: false,
+          evented: false,
+        });
+      }
+
+      // プレビュー表示用画像作成
+      const previewImg = new fabric.Image(editingImage.getElement(), {
+        left: center.x + (editingImage._maskOffsetX || 0),
+        top: center.y + (editingImage._maskOffsetY || 0),
+        scaleX: editingImage.scaleX,
+        scaleY: editingImage.scaleY,
+        originX: 'center',
+        originY: 'center',
+      });
+
+      mCanvas.add(previewImg);
+      mCanvas.add(guideShape);
+      mCanvas.setActiveObject(previewImg);
+      mCanvas.renderAll();
+
+      setModalCanvas(mCanvas);
+
+      return () => {
+        mCanvas.dispose();
+      };
+    }
+  }, [isModalOpen]);
 
   const handleColorChange = (color: string) => {
     setPaperColor(color);
@@ -328,49 +411,72 @@ export default function App() {
     }
   };
 
-  // 画像型抜き（マスク）処理
-  const applyMaskToImage = (imageObj: fabric.Image, targetShape: fabric.Object) => {
+  // マスクの適用（情報保持型）
+  const applyMaskToImage = (imageObj: any, targetShape: fabric.Object, offsetX = 0, offsetY = 0) => {
     if (!fabricCanvas) return;
 
     const shapeCenter = targetShape.getCenterPoint();
     imageObj.setPositionByOrigin(shapeCenter, 'center', 'center');
 
+    let maskData: MaskData;
     let clipPath: fabric.Object;
 
     if (targetShape.type === 'circle') {
       const circle = targetShape as fabric.Circle;
       const radius = circle.radius * circle.scaleX;
+      maskData = { shapeType: 'circle', radius, width: radius * 2, height: radius * 2 };
       clipPath = new fabric.Circle({
         radius: radius / imageObj.scaleX,
         originX: 'center',
         originY: 'center',
+        left: -offsetX / imageObj.scaleX,
+        top: -offsetY / imageObj.scaleY,
       });
     } else {
       const rect = targetShape as fabric.Rect;
-      const w = (rect.width * rect.scaleX) / imageObj.scaleX;
-      const h = (rect.height * rect.scaleY) / imageObj.scaleY;
+      const w = rect.width * rect.scaleX;
+      const h = rect.height * rect.scaleY;
+      maskData = { shapeType: 'rect', width: w, height: h, radius: 0 };
       clipPath = new fabric.Rect({
-        width: w,
-        height: h,
+        width: w / imageObj.scaleX,
+        height: h / imageObj.scaleY,
         originX: 'center',
         originY: 'center',
+        left: -offsetX / imageObj.scaleX,
+        top: -offsetY / imageObj.scaleY,
       });
     }
+
+    imageObj._maskData = maskData;
+    imageObj._maskOffsetX = offsetX;
+    imageObj._maskOffsetY = offsetY;
 
     imageObj.set('clipPath', clipPath);
     fabricCanvas.renderAll();
   };
 
-  // ドラッグ＆ドロップ用ロジック
+  // マスク解除
+  const removeMask = () => {
+    if (!fabricCanvas) return;
+    const activeObj = fabricCanvas.getActiveObject() as any;
+    if (activeObj && activeObj.type === 'image') {
+      activeObj.set('clipPath', undefined);
+      delete activeObj._maskData;
+      delete activeObj._maskOffsetX;
+      delete activeObj._maskOffsetY;
+      setHasMask(false);
+      fabricCanvas.renderAll();
+    }
+  };
+
+  // ドラッグ＆ドロップ処理
   const handleDragStart = (e: React.DragEvent, index: number) => {
     draggedIndexRef.current = index;
     e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', String(index));
   };
 
   const handleDragOver = (e: React.DragEvent, index: number) => {
     e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
     if (dragOverIndex !== index) {
       setDragOverIndex(index);
     }
@@ -383,15 +489,14 @@ export default function App() {
     const fromIndex = draggedIndexRef.current;
     if (fromIndex === null || !fabricCanvas || fromIndex === dropIndex) return;
 
-    const draggedObj = objectsList[fromIndex];
+    const draggedObj = objectsList[fromIndex] as any;
     const targetObj = objectsList[dropIndex];
 
-    // 「画像」を「四角枠/円枠」の上にドロップした場合は型抜き実行
     if (draggedObj.type === 'image' && (targetObj.type === 'rect' || targetObj.type === 'circle')) {
-      applyMaskToImage(draggedObj as fabric.Image, targetObj);
+      applyMaskToImage(draggedObj, targetObj);
       fabricCanvas.setActiveObject(draggedObj);
+      setHasMask(true);
     } else {
-      // 通常のレイヤー重なり順変更 (画面の見た目に合わせて反転計算)
       const currentCanvasObjs = fabricCanvas.getObjects().filter((o) => o.type !== 'line');
       const realFromIdx = currentCanvasObjs.indexOf(draggedObj);
       const realTargetIdx = currentCanvasObjs.indexOf(targetObj);
@@ -404,6 +509,36 @@ export default function App() {
 
     refreshObjectsList(fabricCanvas);
     draggedIndexRef.current = null;
+  };
+
+  // 微調整モーダルで決定された結果をキャンバスへ反映
+  const saveModalAdjustment = () => {
+    if (!modalCanvas || !editingImage || !fabricCanvas) return;
+
+    const previewImg = modalCanvas.getObjects().find((o) => o.type === 'image') as fabric.Image;
+    if (previewImg) {
+      const offsetX = previewImg.left - 200;
+      const offsetY = previewImg.top - 200;
+
+      editingImage.set({
+        scaleX: previewImg.scaleX,
+        scaleY: previewImg.scaleY,
+      });
+
+      const fakeShape: any = {
+        type: editingImage._maskData.shapeType,
+        getCenterPoint: () => editingImage.getCenterPoint(),
+        scaleX: 1,
+        scaleY: 1,
+        radius: editingImage._maskData.radius,
+        width: editingImage._maskData.width,
+        height: editingImage._maskData.height,
+      };
+
+      applyMaskToImage(editingImage, fakeShape, offsetX, offsetY);
+    }
+
+    setIsModalOpen(false);
   };
 
   const deleteSelected = () => {
@@ -527,7 +662,7 @@ export default function App() {
         {/* 編集プロパティ */}
         <div style={{ backgroundColor: '#f9fafb', padding: '10px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
           <label style={{ ...labelStyle, marginBottom: '6px' }}>4. 選択中パーツの編集</label>
-          
+
           <div style={{ marginBottom: '8px' }}>
             <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>線の太さ</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -568,16 +703,38 @@ export default function App() {
           </div>
 
           {selectedObjectType === 'image' && (
-            <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '8px', marginTop: '8px' }}>
-              <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>モノクロ濃淡: {threshold}</span>
-              <input
-                type="range"
-                min="0"
-                max="255"
-                value={threshold}
-                onChange={(e) => updateImageThreshold(Number(e.target.value))}
-                style={{ width: '100%' }}
-              />
+            <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '8px', marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div>
+                <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>モノクロ濃淡: {threshold}</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="255"
+                  value={threshold}
+                  onChange={(e) => updateImageThreshold(Number(e.target.value))}
+                  style={{ width: '100%' }}
+                />
+              </div>
+
+              {hasMask && (
+                <>
+                  <button
+                    onClick={() => {
+                      setEditingImage(activeObject);
+                      setIsModalOpen(true);
+                    }}
+                    style={{ ...btnStyle, backgroundColor: '#2563eb', color: '#ffffff', border: 'none', textAlign: 'center', fontWeight: 'bold' }}
+                  >
+                    ✂️ マスクの範囲・位置を微調整
+                  </button>
+                  <button
+                    onClick={removeMask}
+                    style={{ ...btnStyle, backgroundColor: '#f3f4f6', color: '#374151', textAlign: 'center' }}
+                  >
+                    🔓 マスク（型抜き）を解除
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -603,8 +760,7 @@ export default function App() {
       <div style={{ width: '240px', backgroundColor: '#ffffff', borderLeft: '1px solid #e5e7eb', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px', boxSizing: 'border-box' }}>
         <h2 style={{ fontSize: '14px', fontWeight: 'bold', margin: '0', color: '#111827' }}>レイヤー一覧</h2>
         <p style={{ fontSize: '11px', color: '#4b5563', margin: 0, lineHeight: '1.4' }}>
-          💡 レイヤーを掴んで上下に並び替えできます。<br />
-          画像を四角・丸枠の上に重ねると型抜きされます。
+          💡 画像を四角・丸枠に重ねると型抜きされます。<br />型抜き後も「微調整」で位置やサイズを変更可能です。
         </p>
 
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -642,7 +798,6 @@ export default function App() {
                     alignItems: 'center',
                     justify: 'space-between',
                     userSelect: 'none',
-                    touchAction: 'none',
                   }}
                 >
                   <span style={{ pointerEvents: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -655,6 +810,35 @@ export default function App() {
           )}
         </div>
       </div>
+
+      {/* マスク微調整ポップアップモーダル */}
+      {isModalOpen && (
+        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ backgroundColor: '#ffffff', padding: '20px', borderRadius: '12px', width: '440px', display: 'flex', flexDirection: 'column', gap: '14px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)' }}>
+            <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 'bold', color: '#111827' }}>✂️ マスクの範囲・画像位置の微調整</h3>
+            <p style={{ margin: 0, fontSize: '12px', color: '#4b5563' }}>赤破線の枠に対して、画像をドラッグ移動・拡大縮小してください。</p>
+
+            <div style={{ display: 'flex', justifyContent: 'center', border: '1px solid #d1d5db', borderRadius: '8px', overflow: 'hidden' }}>
+              <canvas ref={modalCanvasRef} />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '6px' }}>
+              <button
+                onClick={() => setIsModalOpen(false)}
+                style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #d1d5db', backgroundColor: '#ffffff', cursor: 'pointer', fontSize: '12px' }}
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={saveModalAdjustment}
+                style={{ padding: '8px 16px', borderRadius: '6px', border: 'none', backgroundColor: '#000000', color: '#ffffff', fontWeight: 'bold', cursor: 'pointer', fontSize: '12px' }}
+              >
+                決定（微調整を反映）
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
