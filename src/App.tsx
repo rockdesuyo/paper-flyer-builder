@@ -1,14 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as fabric from 'fabric';
 
-// 用紙サイズの比率設定 (px換算)
 const PAPER_SIZES = {
   A4: { width: 420, height: 595, label: 'A4' },
   A3: { width: 500, height: 707, label: 'A3' },
   SQUARE: { width: 500, height: 500, label: 'スクエア' },
 };
 
-// カラー上質紙の背景色サンプル
 const PAPER_COLORS = [
   { name: 'オレンジ', color: '#ff944d' },
   { name: 'ピンク', color: '#ff99c8' },
@@ -33,27 +31,28 @@ export default function App() {
   const [selectedSize, setSelectedSize] = useState<keyof typeof PAPER_SIZES>('A4');
   const [paperColor, setPaperColor] = useState<string>('#ff944d');
 
-  // 選択中要素のプロパティ入力（全消去対応のため文字列管理）
+  // 入力プロパティ（文字全消去対応）
   const [strokeWidthInput, setStrokeWidthInput] = useState<string>('4');
   const [fontSizeInput, setFontSizeInput] = useState<string>('32');
   const [fontFamily, setFontFamily] = useState<string>('sans-serif');
   const [threshold, setThreshold] = useState<number>(128);
   const [selectedObjectType, setSelectedObjectType] = useState<string | null>(null);
 
-  // レイヤー一覧用
+  // レイヤー一覧
   const [objectsList, setObjectsList] = useState<fabric.Object[]>([]);
   const [activeObject, setActiveObject] = useState<fabric.Object | null>(null);
 
-  // ガイドライン描画用
+  // ドラッグ＆ドロップ管理
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+
   const guideLinesRef = useRef<fabric.Line[]>([]);
 
-  // レイヤーリストの更新
+  // レイヤー更新
   const refreshObjectsList = (canvas: fabric.Canvas) => {
     const objs = canvas.getObjects().filter((obj) => obj.type !== 'line');
-    setObjectsList([...objs].reverse());
+    setObjectsList([...objs].reverse()); // 画面手前のものをリストの上にする
   };
 
-  // Canvasの初期化
   useEffect(() => {
     if (!canvasRef.current) return;
 
@@ -81,7 +80,7 @@ export default function App() {
       guideLinesRef.current.push(line);
     };
 
-    // スマートガイド
+    // スマートガイド（揃え位置スナップ）
     canvas.on('object:moving', (e) => {
       clearGuides();
       const target = e.target;
@@ -119,13 +118,12 @@ export default function App() {
     canvas.on('object:modified', clearGuides);
     canvas.on('selection:cleared', clearGuides);
 
-    // 選択・変更イベント
     const handleSelection = () => {
       const activeObj = canvas.getActiveObject();
       setActiveObject(activeObj || null);
       if (activeObj) {
         setSelectedObjectType(activeObj.type);
-        if (activeObj.strokeWidth) {
+        if (activeObj.strokeWidth !== undefined) {
           setStrokeWidthInput(String(activeObj.strokeWidth));
         }
         if ((activeObj as fabric.IText).fontSize) {
@@ -158,7 +156,6 @@ export default function App() {
     };
   }, [selectedSize]);
 
-  // 背景色の変更
   const handleColorChange = (color: string) => {
     setPaperColor(color);
     if (fabricCanvas) {
@@ -167,7 +164,6 @@ export default function App() {
     }
   };
 
-  // テキスト追加
   const addText = (isTitle: boolean) => {
     if (!fabricCanvas) return;
     const size = isTitle ? 36 : 18;
@@ -183,15 +179,14 @@ export default function App() {
     fabricCanvas.setActiveObject(text);
   };
 
-  // 図形追加
   const addRectangle = () => {
     if (!fabricCanvas) return;
     const sw = parseInt(strokeWidthInput, 10) || 4;
     const rect = new fabric.Rect({
-      left: 50,
+      left: 80,
       top: 120,
-      width: 150,
-      height: 100,
+      width: 160,
+      height: 160,
       fill: 'transparent',
       stroke: '#000000',
       strokeWidth: sw,
@@ -206,7 +201,7 @@ export default function App() {
     const circle = new fabric.Circle({
       left: 100,
       top: 100,
-      radius: 50,
+      radius: 80,
       fill: 'transparent',
       stroke: '#000000',
       strokeWidth: sw,
@@ -215,7 +210,6 @@ export default function App() {
     fabricCanvas.setActiveObject(circle);
   };
 
-  // 線の太さ変更（全消去可能）
   const handleStrokeWidthChange = (valStr: string) => {
     setStrokeWidthInput(valStr);
     const num = parseInt(valStr, 10);
@@ -228,7 +222,6 @@ export default function App() {
     }
   };
 
-  // フォントサイズ変更（全消去可能）
   const handleFontSizeChange = (valStr: string) => {
     setFontSizeInput(valStr);
     const num = parseInt(valStr, 10);
@@ -251,7 +244,7 @@ export default function App() {
     }
   };
 
-  // 画像アップロード & 2値化
+  // モノクロ変換処理
   const applyMonochromeFilter = (imgElement: HTMLImageElement, threshValue: number) => {
     const tempCanvas = document.createElement('canvas');
     const ctx = tempCanvas.getContext('2d');
@@ -290,8 +283,8 @@ export default function App() {
       imgObj.onload = () => {
         const convertedCanvas = applyMonochromeFilter(imgObj, threshold);
         const fabricImg = new fabric.Image(convertedCanvas, {
-          left: 50,
-          top: 50,
+          left: 60,
+          top: 60,
         });
         (fabricImg as any)._originalImg = imgObj;
 
@@ -315,95 +308,68 @@ export default function App() {
     }
   };
 
-  // 画像トリミング（直接切抜）
-  const cropImage = (type: 'rect' | 'circle') => {
+  // 高精度マスク（クリッピング）処理
+  const applyMaskToImage = (imageObj: fabric.Image, targetShape: fabric.Object) => {
     if (!fabricCanvas) return;
-    const activeObj = fabricCanvas.getActiveObject() as fabric.Image;
-    if (!activeObj || activeObj.type !== 'image') return;
 
-    const width = activeObj.width * activeObj.scaleX;
-    const height = activeObj.height * activeObj.scaleY;
-    const minSize = Math.min(width, height);
+    const shapeCenter = targetShape.getCenterPoint();
+    imageObj.setPositionByOrigin(shapeCenter, 'center', 'center');
 
     let clipPath: fabric.Object;
-    if (type === 'circle') {
-      clipPath = new fabric.Circle({
-        radius: minSize / (2 * activeObj.scaleX),
-        originX: 'center',
-        originY: 'center',
-      });
-    } else {
-      clipPath = new fabric.Rect({
-        width: minSize / activeObj.scaleX,
-        height: minSize / activeObj.scaleY,
-        originX: 'center',
-        originY: 'center',
-      });
-    }
 
-    activeObj.set('clipPath', clipPath);
-    fabricCanvas.renderAll();
-  };
-
-  // 重なった四角・丸型に画像マスク（クリッピング）をかける機能
-  const maskWithShapeLayer = () => {
-    if (!fabricCanvas) return;
-    const activeObj = fabricCanvas.getActiveObject() as fabric.Image;
-    if (!activeObj || activeObj.type !== 'image') return;
-
-    // 画像と重なっている図形（rect / circle）を検出
-    const shapes = fabricCanvas.getObjects().filter((o) => o.type === 'rect' || o.type === 'circle');
-    const imgCenter = activeObj.getCenterPoint();
-
-    // 一番近く重なっている図形を取得
-    const targetShape = shapes.find((shape) => {
-      const shapeCenter = shape.getCenterPoint();
-      const dist = Math.hypot(shapeCenter.x - imgCenter.x, shapeCenter.y - imgCenter.y);
-      return dist < 150; // 近接距離内
-    });
-
-    if (!targetShape) {
-      alert('画像と重ね合わせた「四角」または「円」の枠線を近くに配置してください。');
-      return;
-    }
-
-    let clipPath: fabric.Object;
     if (targetShape.type === 'circle') {
       const circle = targetShape as fabric.Circle;
       const radius = circle.radius * circle.scaleX;
       clipPath = new fabric.Circle({
-        radius: radius / activeObj.scaleX,
+        radius: radius / imageObj.scaleX,
         originX: 'center',
         originY: 'center',
       });
     } else {
       const rect = targetShape as fabric.Rect;
+      const w = (rect.width * rect.scaleX) / imageObj.scaleX;
+      const h = (rect.height * rect.scaleY) / imageObj.scaleY;
       clipPath = new fabric.Rect({
-        width: (rect.width * rect.scaleX) / activeObj.scaleX,
-        height: (rect.height * rect.scaleY) / activeObj.scaleY,
+        width: w,
+        height: h,
         originX: 'center',
         originY: 'center',
       });
     }
 
-    // 位置をぴったりスナップ
-    activeObj.setPositionByOrigin(targetShape.getCenterPoint(), 'center', 'center');
-    activeObj.set('clipPath', clipPath);
+    imageObj.set('clipPath', clipPath);
     fabricCanvas.renderAll();
   };
 
-  // レイヤー重なり順操作
-  const moveLayer = (direction: 'up' | 'down' | 'top' | 'bottom') => {
-    if (!fabricCanvas || !activeObject) return;
-    if (direction === 'up') fabricCanvas.bringObjectForward(activeObject);
-    if (direction === 'down') fabricCanvas.sendObjectBackwards(activeObject);
-    if (direction === 'top') fabricCanvas.bringObjectToFront(activeObject);
-    if (direction === 'bottom') fabricCanvas.sendObjectToBack(activeObject);
-    fabricCanvas.renderAll();
+  // ドラッグ＆ドロップ処理（レイヤー重ね合わせでマスク発動）
+  const handleDragStart = (index: number) => {
+    setDraggedIndex(index);
+  };
+
+  const handleDrop = (dropIndex: number) => {
+    if (draggedIndex === null || !fabricCanvas) return;
+
+    const draggedObj = objectsList[draggedIndex];
+    const targetObj = objectsList[dropIndex];
+
+    // 「画像」を「四角または円」の上にドロップした場合、自動でマスク実行
+    if (draggedObj.type === 'image' && (targetObj.type === 'rect' || targetObj.type === 'circle')) {
+      applyMaskToImage(draggedObj as fabric.Image, targetObj);
+      fabricCanvas.setActiveObject(draggedObj);
+    } else {
+      // 通常のレイヤー入れ替え処理
+      if (draggedIndex > dropIndex) {
+        fabricCanvas.bringObjectForward(draggedObj);
+      } else {
+        fabricCanvas.sendObjectBackwards(draggedObj);
+      }
+      fabricCanvas.renderAll();
+    }
+
     refreshObjectsList(fabricCanvas);
+    setDraggedIndex(null);
   };
 
-  // 選択要素の削除
   const deleteSelected = () => {
     if (!fabricCanvas) return;
     const activeObjects = fabricCanvas.getActiveObjects();
@@ -412,7 +378,6 @@ export default function App() {
     fabricCanvas.renderAll();
   };
 
-  // 印刷用データ出力
   const exportForPrint = () => {
     if (!fabricCanvas) return;
 
@@ -439,7 +404,6 @@ export default function App() {
     link.click();
   };
 
-  // レイヤー名ラベルの取得
   const getObjectLabel = (obj: fabric.Object) => {
     if (obj.type === 'i-text') {
       const txt = (obj as fabric.IText).text || '';
@@ -453,11 +417,11 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', height: '100vh', width: '100vw', fontFamily: 'sans-serif', backgroundColor: '#f3f4f6', margin: 0, padding: 0, overflow: 'hidden' }}>
-      {/* 左サイドバー */}
+      {/* 左操作パネル */}
       <div style={{ width: '320px', backgroundColor: '#ffffff', borderRight: '1px solid #e5e7eb', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px', boxSizing: 'border-box', overflowY: 'auto' }}>
         <h1 style={{ fontSize: '18px', fontWeight: 'bold', margin: '0', color: '#111827' }}>レトロチラシ作成ツール</h1>
 
-        {/* 1. 用紙サイズ */}
+        {/* 用紙サイズ */}
         <div>
           <label style={labelStyle}>1. 用紙サイズ</label>
           <div style={{ display: 'flex', gap: '6px' }}>
@@ -474,7 +438,7 @@ export default function App() {
                   cursor: 'pointer',
                   backgroundColor: selectedSize === sizeKey ? '#000000' : '#ffffff',
                   color: selectedSize === sizeKey ? '#ffffff' : '#374151',
-                  fontWeight: selectedSize === sizeKey ? '#bold' : 'normal',
+                  fontWeight: selectedSize === sizeKey ? 'bold' : 'normal',
                 }}
               >
                 {PAPER_SIZES[sizeKey].label}
@@ -483,7 +447,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* 2. 用紙カラー */}
+        {/* 用紙カラー */}
         <div>
           <label style={labelStyle}>2. 用紙カラー</label>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px' }}>
@@ -505,7 +469,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* 3. 素材追加 */}
+        {/* 素材追加 */}
         <div>
           <label style={labelStyle}>3. 素材を追加</label>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -524,11 +488,10 @@ export default function App() {
           </div>
         </div>
 
-        {/* 4. 選択中パーツの編集 */}
+        {/* 選択パーツ編集 */}
         <div style={{ backgroundColor: '#f9fafb', padding: '10px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
           <label style={{ ...labelStyle, marginBottom: '6px' }}>4. 選択中パーツの編集</label>
           
-          {/* 線の太さ（px数値入力） */}
           <div style={{ marginBottom: '8px' }}>
             <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>線の太さ</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -544,7 +507,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* フォント指定 & 文字サイズ（px数値入力） */}
           <div style={{ marginBottom: '8px' }}>
             <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>フォント・文字サイズ</span>
             <select
@@ -569,7 +531,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* 画像コントロール & 図形マスク */}
           {selectedObjectType === 'image' && (
             <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '8px', marginTop: '8px' }}>
               <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>モノクロ濃淡: {threshold}</span>
@@ -579,22 +540,12 @@ export default function App() {
                 max="255"
                 value={threshold}
                 onChange={(e) => updateImageThreshold(Number(e.target.value))}
-                style={{ width: '100%', marginBottom: '6px' }}
+                style={{ width: '100%' }}
               />
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <button onClick={maskWithShapeLayer} style={{ ...btnStyle, backgroundColor: '#eff6ff', borderColor: '#bfdbfe', color: '#1d4ed8', fontSize: '11px', textAlign: 'center', fontWeight: 'bold' }}>
-                  🎯 重ねた図形でマスク
-                </button>
-                <div style={{ display: 'flex', gap: '4px' }}>
-                  <button onClick={() => cropImage('rect')} style={{ ...btnStyle, flex: 1, padding: '4px', fontSize: '10px', textAlign: 'center' }}>正方形切抜</button>
-                  <button onClick={() => cropImage('circle')} style={{ ...btnStyle, flex: 1, padding: '4px', fontSize: '10px', textAlign: 'center' }}>円形切抜</button>
-                </div>
-              </div>
             </div>
           )}
         </div>
 
-        {/* 削除・保存 */}
         <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
           <button onClick={deleteSelected} style={{ ...btnStyle, color: '#dc2626', borderColor: '#fca5a5', backgroundColor: '#fef2f2', textAlign: 'center' }}>
             🗑 選択した要素を削除
@@ -605,29 +556,21 @@ export default function App() {
         </div>
       </div>
 
-      {/* 中央キャンバスエリア */}
+      {/* キャンバス表示エリア */}
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', overflow: 'auto' }}>
         <div style={{ boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)', border: '1px solid #d1d5db', lineHeight: 0 }}>
           <canvas ref={canvasRef} />
         </div>
       </div>
 
-      {/* 右サイドバー（レイヤーパネル） */}
-      <div style={{ width: '220px', backgroundColor: '#ffffff', borderLeft: '1px solid #e5e7eb', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', boxSizing: 'border-box' }}>
+      {/* 右レイヤーパネル（ドラッグ＆ドロップ対応） */}
+      <div style={{ width: '230px', backgroundColor: '#ffffff', borderLeft: '1px solid #e5e7eb', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px', boxSizing: 'border-box' }}>
         <h2 style={{ fontSize: '14px', fontWeight: 'bold', margin: '0', color: '#111827' }}>レイヤー一覧</h2>
+        <p style={{ fontSize: '10px', color: '#6b7280', margin: 0 }}>
+          💡 画像を「四角」や「円」の上にドラッグ＆ドロップすると枠型にマスクされます。
+        </p>
 
-        {/* 重ね順変更ボタン */}
-        {activeObject && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
-            <button onClick={() => moveLayer('up')} style={{ ...btnStyle, fontSize: '10px', textAlign: 'center' }}>前面へ</button>
-            <button onClick={() => moveLayer('down')} style={{ ...btnStyle, fontSize: '10px', textAlign: 'center' }}>背面へ</button>
-            <button onClick={() => moveLayer('top')} style={{ ...btnStyle, fontSize: '10px', textAlign: 'center' }}>最前面</button>
-            <button onClick={() => moveLayer('bottom')} style={{ ...btnStyle, fontSize: '10px', textAlign: 'center' }}>最背面</button>
-          </div>
-        )}
-
-        {/* レイヤーリスト */}
-        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
           {objectsList.length === 0 ? (
             <p style={{ fontSize: '12px', color: '#9ca3af', textAlign: 'center', marginTop: '20px' }}>要素がありません</p>
           ) : (
@@ -636,6 +579,10 @@ export default function App() {
               return (
                 <div
                   key={index}
+                  draggable
+                  onDragStart={() => handleDragStart(index)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => handleDrop(index)}
                   onClick={() => {
                     if (fabricCanvas) {
                       fabricCanvas.setActiveObject(obj);
@@ -643,20 +590,24 @@ export default function App() {
                     }
                   }}
                   style={{
-                    padding: '8px',
+                    padding: '8px 10px',
                     fontSize: '12px',
                     borderRadius: '6px',
-                    border: '1px solid',
-                    borderColor: isSelected ? '#000000' : '#e5e7eb',
+                    border: '1px dashed',
+                    borderColor: isSelected ? '#000000' : '#d1d5db',
                     backgroundColor: isSelected ? '#f3f4f6' : '#ffffff',
                     fontWeight: isSelected ? 'bold' : 'normal',
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
+                    cursor: 'grab',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justify: 'space-between',
+                    userSelect: 'none',
                   }}
                 >
-                  {getObjectLabel(obj)}
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {getObjectLabel(obj)}
+                  </span>
+                  <span style={{ fontSize: '10px', color: '#9ca3af' }}>⣿</span>
                 </div>
               );
             })
