@@ -454,19 +454,37 @@ export default function App() {
     };
   }, [selectedSize]);
 
-  // キーボード操作
+  // キーボード操作（Undo & 方向キー & Delete / Backspace による削除）
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!fabricCanvas) return;
 
-      const activeEl = document.activeElement;
-      if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'SELECT' || activeEl.tagName === 'TEXTAREA')) {
+      const activeEl = document.activeElement as HTMLElement | null;
+      if (
+        activeEl &&
+        (activeEl.tagName === 'INPUT' ||
+          activeEl.tagName === 'SELECT' ||
+          activeEl.tagName === 'TEXTAREA' ||
+          activeEl.isContentEditable)
+      ) {
         return;
       }
 
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         undo();
+        return;
+      }
+
+      // Delete または Backspace で選択要素の削除
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        const activeObj = fabricCanvas.getActiveObject();
+        // テキスト入力編集中の場合はキー操作を妨げない
+        if (activeObj && activeObj.type === 'i-text' && (activeObj as fabric.IText).isEditing) {
+          return;
+        }
+        e.preventDefault();
+        deleteSelected();
         return;
       }
 
@@ -1216,11 +1234,19 @@ export default function App() {
     }
   };
 
-  const deleteSelected = () => {
+  // オブジェクトの削除（指定引数がない場合は選択中要素を削除）
+  const deleteSelected = (targetObj?: fabric.Object) => {
     if (!fabricCanvas) return;
-    const activeObjects = fabricCanvas.getActiveObjects();
-    activeObjects.forEach((obj) => fabricCanvas.remove(obj));
-    fabricCanvas.discardActiveObject();
+    if (targetObj) {
+      fabricCanvas.remove(targetObj);
+      if (fabricCanvas.getActiveObject() === targetObj) {
+        fabricCanvas.discardActiveObject();
+      }
+    } else {
+      const activeObjects = fabricCanvas.getActiveObjects();
+      activeObjects.forEach((obj) => fabricCanvas.remove(obj));
+      fabricCanvas.discardActiveObject();
+    }
     fabricCanvas.renderAll();
     saveHistory(fabricCanvas);
   };
@@ -1322,7 +1348,7 @@ export default function App() {
                   cursor: 'pointer',
                   backgroundColor: selectedSize === sizeKey ? '#000000' : '#ffffff',
                   color: selectedSize === sizeKey ? '#ffffff' : '#374151',
-                  fontWeight: selectedSize === sizeKey ? '#bold' : 'normal',
+                  fontWeight: selectedSize === sizeKey ? 'bold' : 'normal',
                 }}
               >
                 {PAPER_SIZES[sizeKey].label}
@@ -1346,6 +1372,7 @@ export default function App() {
                   border: paperColor === c.color ? '3px solid #000' : '1px solid #d1d5db',
                   backgroundColor: c.color,
                   cursor: 'pointer',
+                  boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
                 }}
                 title={c.name}
               />
@@ -1419,7 +1446,7 @@ export default function App() {
                       <button
                         key={`all_${ink.name}`}
                         onClick={() => changeInkColor(ink.hex, 'all')}
-                        style={{ width: '22px', height: '22px', borderRadius: '50%', backgroundColor: ink.hex, border: '1px solid #d1d5db', cursor: 'pointer' }}
+                        style={{ width: '22px', height: '22px', borderRadius: '50%', backgroundColor: ink.hex, border: '1px solid #d1d5db', cursor: 'pointer', boxShadow: '0 1px 2px rgba(0,0,0,0.1)' }}
                         title={`全体を${ink.name}にする`}
                       />
                     ))}
@@ -1433,7 +1460,7 @@ export default function App() {
                       <button
                         key={`frame_${ink.name}`}
                         onClick={() => changeInkColor(ink.hex, 'frame')}
-                        style={{ width: '22px', height: '22px', borderRadius: '50%', backgroundColor: ink.hex, border: '1px solid #d1d5db', cursor: 'pointer' }}
+                        style={{ width: '22px', height: '22px', borderRadius: '50%', backgroundColor: ink.hex, border: '1px solid #d1d5db', cursor: 'pointer', boxShadow: '0 1px 2px rgba(0,0,0,0.1)' }}
                         title={`枠を${ink.name}にする`}
                       />
                     ))}
@@ -1447,7 +1474,7 @@ export default function App() {
                       <button
                         key={`img_${ink.name}`}
                         onClick={() => changeInkColor(ink.hex, 'image')}
-                        style={{ width: '22px', height: '22px', borderRadius: '50%', backgroundColor: ink.hex, border: '1px solid #d1d5db', cursor: 'pointer' }}
+                        style={{ width: '22px', height: '22px', borderRadius: '50%', backgroundColor: ink.hex, border: '1px solid #d1d5db', cursor: 'pointer', boxShadow: '0 1px 2px rgba(0,0,0,0.1)' }}
                         title={`写真を${ink.name}にする`}
                       />
                     ))}
@@ -1471,6 +1498,7 @@ export default function App() {
                       backgroundColor: ink.hex,
                       border: activeInkColor === ink.hex ? '3px solid #000' : '1px solid #d1d5db',
                       cursor: 'pointer',
+                      boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
                     }}
                     title={ink.name}
                   />
@@ -1503,16 +1531,26 @@ export default function App() {
                 <button
                   onClick={() => changeShapeFillColor('transparent')}
                   style={{
-                    padding: '2px 6px',
+                    padding: '2px 8px',
                     fontSize: '10px',
                     borderRadius: '4px',
-                    border: '1px solid #d1d5db',
-                    backgroundColor: shapeFillColor === 'transparent' ? '#000' : '#fff',
-                    color: shapeFillColor === 'transparent' ? '#fff' : '#000',
+                    border: shapeFillColor === 'transparent' ? '2px solid #000' : '1px solid #d1d5db',
+                    backgroundColor: '#ffffff',
+                    backgroundImage: `linear-gradient(45deg, #e2e8f0 25%, transparent 25%), 
+                                      linear-gradient(-45deg, #e2e8f0 25%, transparent 25%), 
+                                      linear-gradient(45deg, transparent 75%, #e2e8f0 75%), 
+                                      linear-gradient(-45deg, transparent 75%, #e2e8f0 75%)`,
+                    backgroundSize: '8px 8px',
+                    backgroundPosition: '0 0, 0 4px, 4px -4px, -4px 0',
+                    color: '#000000',
+                    fontWeight: 'bold',
                     cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
                   }}
                 >
-                  透明
+                  <span style={{ backgroundColor: '#ffffff', padding: '0 2px', borderRadius: '2px' }}>透明</span>
                 </button>
                 <input
                   type="color"
@@ -1758,7 +1796,7 @@ export default function App() {
           <button onClick={undo} style={{ ...btnStyle, backgroundColor: '#f3f4f6', color: '#374151', textAlign: 'center' }}>
             ↩ 元に戻す (Undo)
           </button>
-          <button onClick={deleteSelected} style={{ ...btnStyle, color: '#dc2626', borderColor: '#fca5a5', backgroundColor: '#fef2f2', textAlign: 'center' }}>
+          <button onClick={() => deleteSelected()} style={{ ...btnStyle, color: '#dc2626', borderColor: '#fca5a5', backgroundColor: '#fef2f2', textAlign: 'center' }}>
             🗑 選択した要素を削除
           </button>
           <div style={{ display: 'flex', gap: '6px' }}>
@@ -1858,8 +1896,26 @@ export default function App() {
                       </button>
                     </div>
 
-                    {/* 順序変更ボタン (▲ 上へ / ▼ 下へ) */}
-                    <div style={{ display: 'flex', gap: '2px' }}>
+                    {/* レイヤー削除ボタン ＆ 順序変更ボタン (▲ 上へ / ▼ 下へ) */}
+                    <div style={{ display: 'flex', gap: '3px', alignItems: 'center' }}>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteSelected(obj);
+                        }}
+                        style={{
+                          border: '1px solid #fca5a5',
+                          backgroundColor: '#fef2f2',
+                          color: '#dc2626',
+                          borderRadius: '3px',
+                          padding: '2px 4px',
+                          fontSize: '10px',
+                          cursor: 'pointer',
+                        }}
+                        title="このレイヤーを削除"
+                      >
+                        🗑
+                      </button>
                       <button
                         disabled={index === 0}
                         onClick={(e) => {
