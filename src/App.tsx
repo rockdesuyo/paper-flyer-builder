@@ -57,6 +57,35 @@ const RETRO_TEXT_STYLES = [
   { label: 'ギグポスター風 (ROCK)', text: 'ROCK', bg: '#000000', color: '#ff944d', font: 'Arial Black', skew: -10 },
 ];
 
+const labelStyle: React.CSSProperties = {
+  fontSize: '12px',
+  fontWeight: 'bold',
+  color: '#374151',
+  marginBottom: '4px',
+  display: 'block',
+};
+
+const btnStyle: React.CSSProperties = {
+  padding: '6px 12px',
+  fontSize: '12px',
+  borderRadius: '6px',
+  border: '1px solid #d1d5db',
+  backgroundColor: '#ffffff',
+  color: '#374151',
+  cursor: 'pointer',
+};
+
+const layerOrderBtnStyle: React.CSSProperties = {
+  padding: '4px 6px',
+  fontSize: '10px',
+  borderRadius: '4px',
+  border: '1px solid #cbd5e1',
+  backgroundColor: '#ffffff',
+  color: '#334155',
+  cursor: 'pointer',
+  textAlign: 'center',
+};
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const jsonFileInputRef = useRef<HTMLInputElement>(null);
@@ -417,6 +446,22 @@ export default function App() {
         setHasMask(!!activeObj._isMaskGroup);
         setSkewX(activeObj.skewX || 0);
         setSkewY(activeObj.skewY || 0);
+
+        if (activeObj._isMaskGroup) {
+          const groupObjs = activeObj.getObjects ? activeObj.getObjects() : [];
+          const targetImg = groupObjs.find((o: any) => o.type === 'image') || activeObj._maskedImage;
+          if (targetImg) {
+            setThreshold(targetImg._threshold !== undefined ? targetImg._threshold : 128);
+            setHalftoneEnabled(!!(targetImg._halftoneDotSize && targetImg._halftoneDotSize > 1));
+            setHalftoneDotSize(targetImg._halftoneDotSize || 6);
+            setHalftoneShape(targetImg._halftoneShape || 'dot');
+          }
+        } else if (activeObj.type === 'image') {
+          setThreshold(activeObj._threshold !== undefined ? activeObj._threshold : 128);
+          setHalftoneEnabled(!!(activeObj._halftoneDotSize && activeObj._halftoneDotSize > 1));
+          setHalftoneDotSize(activeObj._halftoneDotSize || 6);
+          setHalftoneShape(activeObj._halftoneShape || 'dot');
+        }
 
         if (activeObj.strokeWidth !== undefined) {
           setStrokeWidthInput(String(activeObj.strokeWidth));
@@ -798,7 +843,7 @@ export default function App() {
       if (activeObj.stroke) activeObj.set('stroke', hex);
       if (activeObj.fill && activeObj.fill !== 'transparent') activeObj.set('fill', hex);
     } else if (activeObj._isMaskGroup) {
-      const groupObjs = activeObj.getObjects();
+      const groupObjs = activeObj.getObjects ? activeObj.getObjects() : [];
       const frame = groupObjs.find((o: any) => o.type !== 'image') || activeObj._frameShape;
       const targetImg = groupObjs.find((o: any) => o.type === 'image') || activeObj._maskedImage;
 
@@ -809,13 +854,13 @@ export default function App() {
       if ((targetType === 'all' || targetType === 'image') && targetImg) {
         targetImg._inkColor = hex;
         if (targetImg._originalImgElement) {
-          const thresh = targetImg._threshold || threshold;
+          const thresh = targetImg._threshold !== undefined ? targetImg._threshold : threshold;
           const newCanvas = applyMonochromeFilter(
             targetImg._originalImgElement,
             thresh,
             hex,
-            targetImg._halftoneDotSize,
-            targetImg._halftoneShape
+            targetImg._halftoneDotSize !== undefined ? targetImg._halftoneDotSize : (halftoneEnabled ? halftoneDotSize : 0),
+            targetImg._halftoneShape || halftoneShape
           );
           targetImg.setElement(newCanvas);
         }
@@ -823,13 +868,13 @@ export default function App() {
     } else if (activeObj.type === 'image') {
       activeObj._inkColor = hex;
       if (activeObj._originalImgElement) {
-        const thresh = activeObj._threshold || threshold;
+        const thresh = activeObj._threshold !== undefined ? activeObj._threshold : threshold;
         const newCanvas = applyMonochromeFilter(
           activeObj._originalImgElement,
           thresh,
           hex,
-          activeObj._halftoneDotSize,
-          activeObj._halftoneShape
+          activeObj._halftoneDotSize !== undefined ? activeObj._halftoneDotSize : (halftoneEnabled ? halftoneDotSize : 0),
+          activeObj._halftoneShape || halftoneShape
         );
         activeObj.setElement(newCanvas);
       }
@@ -1213,18 +1258,21 @@ export default function App() {
     if (activeObj) {
       let targetImg = activeObj;
       if (activeObj._isMaskGroup) {
-        targetImg = activeObj.getObjects().find((o: any) => o.type === 'image') || activeObj._maskedImage;
+        const groupObjs = activeObj.getObjects ? activeObj.getObjects() : [];
+        targetImg = groupObjs.find((o: any) => o.type === 'image') || activeObj._maskedImage;
       }
 
       if (targetImg && targetImg._originalImgElement) {
         const color = targetImg._inkColor || activeInkColor;
         targetImg._threshold = newThresh;
+        const dotSizeVal = targetImg._halftoneDotSize !== undefined ? targetImg._halftoneDotSize : (halftoneEnabled ? halftoneDotSize : 0);
+        const shapeVal = targetImg._halftoneShape || halftoneShape;
         const newCanvas = applyMonochromeFilter(
           targetImg._originalImgElement,
           newThresh,
           color,
-          targetImg._halftoneDotSize || (halftoneEnabled ? halftoneDotSize : 0),
-          targetImg._halftoneShape || halftoneShape
+          dotSizeVal,
+          shapeVal
         );
         targetImg.setElement(newCanvas);
         fabricCanvas.renderAll();
@@ -1244,12 +1292,13 @@ export default function App() {
     if (activeObj) {
       let targetImg = activeObj;
       if (activeObj._isMaskGroup) {
-        targetImg = activeObj.getObjects().find((o: any) => o.type === 'image') || activeObj._maskedImage;
+        const groupObjs = activeObj.getObjects ? activeObj.getObjects() : [];
+        targetImg = groupObjs.find((o: any) => o.type === 'image') || activeObj._maskedImage;
       }
 
       if (targetImg && targetImg._originalImgElement) {
         const color = targetImg._inkColor || activeInkColor;
-        const thresh = targetImg._threshold || threshold;
+        const thresh = targetImg._threshold !== undefined ? targetImg._threshold : threshold;
         const dotSizeVal = enabled ? size : 0;
         targetImg._halftoneDotSize = dotSizeVal;
         targetImg._halftoneShape = shape;
@@ -1336,7 +1385,7 @@ export default function App() {
 
             allObjs.forEach((obj: any) => {
               if (obj._isMaskGroup) {
-                const groupObjs = obj.getObjects();
+                const groupObjs = obj.getObjects ? obj.getObjects() : [];
                 const img = groupObjs.find((o: any) => o.type === 'image') || obj._maskedImage;
                 if (img && img._originalImgSrc) {
                   const p = new Promise<void>((resolve) => {
@@ -1344,7 +1393,7 @@ export default function App() {
                     el.src = img._originalImgSrc;
                     el.onload = () => {
                       img._originalImgElement = el;
-                      const thresh = img._threshold || 128;
+                      const thresh = img._threshold !== undefined ? img._threshold : 128;
                       const ink = img._inkColor || '#000000';
                       const filteredCanvas = applyMonochromeFilter(
                         el,
@@ -1366,7 +1415,7 @@ export default function App() {
                   el.src = obj._originalImgSrc;
                   el.onload = () => {
                     obj._originalImgElement = el;
-                    const thresh = obj._threshold || 128;
+                    const thresh = obj._threshold !== undefined ? obj._threshold : 128;
                     const ink = obj._inkColor || '#000000';
                     const filteredCanvas = applyMonochromeFilter(
                       el,
@@ -1507,6 +1556,39 @@ export default function App() {
     }
   };
 
+  // レイヤー一覧クリック（Shiftキーによる複数選択サポート）
+  const handleLayerClick = (obj: fabric.Object, e: React.MouseEvent) => {
+    if (!fabricCanvas) return;
+
+    if (e.shiftKey) {
+      const activeObj = fabricCanvas.getActiveObject();
+      if (!activeObj) {
+        fabricCanvas.setActiveObject(obj);
+      } else if (activeObj.type === 'activeSelection') {
+        const selection = activeObj as fabric.ActiveSelection;
+        const currentObjects = selection.getObjects();
+        if (currentObjects.includes(obj)) {
+          selection.remove(obj);
+          if (selection.size() === 1) {
+            fabricCanvas.setActiveObject(selection.getObjects()[0]);
+          }
+        } else {
+          selection.addWithUpdate(obj);
+        }
+      } else {
+        if (activeObj !== obj) {
+          const selection = new fabric.ActiveSelection([activeObj, obj], {
+            canvas: fabricCanvas,
+          });
+          fabricCanvas.setActiveObject(selection);
+        }
+      }
+    } else {
+      fabricCanvas.setActiveObject(obj);
+    }
+    fabricCanvas.renderAll();
+  };
+
   // オブジェクトの削除（指定引数がない場合は選択中要素を削除）
   const deleteSelected = (targetObj?: fabric.Object) => {
     if (!fabricCanvas) return;
@@ -1580,6 +1662,15 @@ export default function App() {
     if (obj.type === 'path') return '🎨 パス・素材パーツ';
     if (obj.type === 'image') return '🖼 画像';
     return 'パーツ';
+  };
+
+  const isObjectInSelection = (obj: fabric.Object) => {
+    if (!activeObject) return false;
+    if (activeObject === obj) return true;
+    if (activeObject.type === 'activeSelection') {
+      return (activeObject as fabric.ActiveSelection).getObjects().includes(obj);
+    }
+    return false;
   };
 
   return (
@@ -2237,7 +2328,7 @@ export default function App() {
             <p style={{ fontSize: '12px', color: '#9ca3af', textAlign: 'center', marginTop: '20px' }}>要素がありません</p>
           ) : (
             objectsList.map((obj: any, index) => {
-              const isSelected = activeObject === obj;
+              const isSelected = isObjectInSelection(obj);
               const isDragging = draggedIndex === index;
               const isTargeted = dragOverIndex === index;
               const isGroup = obj.type === 'group' || obj._isGeneralGroup || obj._isMaskGroup;
@@ -2255,12 +2346,7 @@ export default function App() {
                     onDragLeave={() => setDragOverIndex(null)}
                     onDragEnd={handleDragEnd}
                     onDrop={(e) => handleDrop(e, index)}
-                    onClick={() => {
-                      if (fabricCanvas) {
-                        fabricCanvas.setActiveObject(obj);
-                        fabricCanvas.renderAll();
-                      }
-                    }}
+                    onClick={(e) => handleLayerClick(obj, e)}
                     style={{
                       padding: '6px 8px',
                       fontSize: '12px',
@@ -2363,38 +2449,31 @@ export default function App() {
                   {/* グループ（マスク／汎用グループ）の場合、配下の構成要素を展開して個別選択可能にする (追加機能) */}
                   {isGroup && childObjects.length > 0 && (
                     <div style={{ paddingLeft: '16px', display: 'flex', flexDirection: 'column', gap: '2px', borderLeft: '2px dashed #cbd5e1', marginLeft: '8px' }}>
-                      {childObjects.map((childObj: any, cIdx: number) => {
-                        const isChildSelected = activeObject === childObj;
-                        return (
-                          <div
-                            key={cIdx}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (fabricCanvas) {
-                                fabricCanvas.setActiveObject(childObj);
-                                fabricCanvas.renderAll();
-                              }
-                            }}
-                            style={{
-                              fontSize: '11px',
-                              color: isChildSelected ? '#1d4ed8' : '#4b5563',
-                              padding: '3px 6px',
-                              backgroundColor: isChildSelected ? '#eff6ff' : '#f9fafb',
-                              borderRadius: '4px',
-                              border: isChildSelected ? '1px solid #93c5fd' : '1px solid #f3f4f6',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                            }}
-                          >
-                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              └ {getObjectLabel(childObj)}
-                            </span>
-                            <span style={{ fontSize: '9px', color: '#9ca3af' }}>個別選択</span>
-                          </div>
-                        );
-                      })}
+                      {childObjects.map((childObj: any, cIdx: number) => (
+                        <div
+                          key={cIdx}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (fabricCanvas) {
+                              fabricCanvas.setActiveObject(childObj);
+                              fabricCanvas.renderAll();
+                            }
+                          }}
+                          style={{
+                            padding: '4px 6px',
+                            fontSize: '11px',
+                            borderRadius: '4px',
+                            backgroundColor: activeObject === childObj ? '#dbeafe' : '#f8fafc',
+                            color: '#475569',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                          }}
+                        >
+                          <span>{getObjectLabel(childObj)}</span>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -2406,31 +2485,3 @@ export default function App() {
     </div>
   );
 }
-
-const labelStyle: React.CSSProperties = {
-  display: 'block',
-  fontSize: '12px',
-  fontWeight: 'bold',
-  color: '#374151',
-  marginBottom: '4px',
-};
-
-const btnStyle: React.CSSProperties = {
-  padding: '6px 8px',
-  fontSize: '11px',
-  backgroundColor: '#ffffff',
-  border: '1px solid #d1d5db',
-  borderRadius: '6px',
-  cursor: 'pointer',
-  textAlign: 'left',
-};
-
-const layerOrderBtnStyle: React.CSSProperties = {
-  padding: '4px 6px',
-  fontSize: '10px',
-  backgroundColor: '#ffffff',
-  border: '1px solid #cbd5e1',
-  borderRadius: '4px',
-  cursor: 'pointer',
-  textAlign: 'center',
-};
