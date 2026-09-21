@@ -18,6 +18,14 @@ const PAPER_COLORS = [
   { name: 'ホワイト', color: '#ffffff' },
 ];
 
+const INK_COLORS = [
+  { name: 'ブラック', hex: '#000000', rgb: [0, 0, 0] },
+  { name: 'ブルー', hex: '#0055ff', rgb: [0, 85, 255] },
+  { name: 'レッド', hex: '#e60012', rgb: [230, 0, 18] },
+  { name: '濃いピンク', hex: '#e4007f', rgb: [228, 0, 127] },
+  { name: 'グリーン', hex: '#009944', rgb: [0, 153, 68] },
+];
+
 const FONTS = [
   { name: 'ゴシック体', family: 'sans-serif' },
   { name: '明朝体', family: 'serif' },
@@ -37,6 +45,7 @@ export default function App() {
   const [fontSizeInput, setFontSizeInput] = useState<string>('32');
   const [fontFamily, setFontFamily] = useState<string>('sans-serif');
   const [threshold, setThreshold] = useState<number>(128);
+  const [activeInkColor, setActiveInkColor] = useState<string>('#000000');
   const [selectedObjectType, setSelectedObjectType] = useState<string | null>(null);
   const [hasMask, setHasMask] = useState<boolean>(false);
   const [isEditingMaskMode, setIsEditingMaskMode] = useState<boolean>(false);
@@ -76,6 +85,7 @@ export default function App() {
         '_frameShape',
         '_originalImg',
         '_maskFrameData',
+        '_inkColor',
       ])
     );
 
@@ -108,7 +118,7 @@ export default function App() {
     });
   };
 
-  // 正確な Mask / ClipPath の生成計算（ローカル行列計算）
+  // 正確な Mask / ClipPath の生成計算
   const updateImageClipPath = (img: fabric.Image, frameData: any) => {
     let clipShape: fabric.Object;
 
@@ -127,7 +137,6 @@ export default function App() {
       });
     }
 
-    // 枠線のワールド変換行列を取得
     const frameMatrix = fabric.util.composeMatrix({
       translateX: frameData.left,
       translateY: frameData.top,
@@ -138,11 +147,9 @@ export default function App() {
       skewY: 0,
     });
 
-    // 画像のワールド変換行列の逆行列を取得
     const imgMatrix = img.calcTransformMatrix();
     const invertedImgMatrix = fabric.util.invertTransform(imgMatrix);
 
-    // 画像のローカル座標系に対する枠線の相対行列を計算
     const relativeMatrix = fabric.util.multiplyTransformMatrices(invertedImgMatrix, frameMatrix);
     const options = fabric.util.qrDecompose(relativeMatrix);
 
@@ -255,6 +262,15 @@ export default function App() {
         if ((activeObj as fabric.IText).fontFamily) {
           setFontFamily((activeObj as fabric.IText).fontFamily);
         }
+
+        // カラーの同期
+        if (activeObj.fill && typeof activeObj.fill === 'string') {
+          setActiveInkColor(activeObj.fill);
+        } else if (activeObj.stroke) {
+          setActiveInkColor(activeObj.stroke);
+        } else if (activeObj._inkColor) {
+          setActiveInkColor(activeObj._inkColor);
+        }
       } else {
         setSelectedObjectType(null);
         setHasMask(false);
@@ -352,7 +368,7 @@ export default function App() {
       scaleX: 1,
       scaleY: 1,
       angle: targetShape.angle || 0,
-      stroke: targetShape.stroke || '#000000',
+      stroke: targetShape.stroke || activeInkColor,
       strokeWidth: targetShape.strokeWidth || 4,
     };
 
@@ -414,7 +430,6 @@ export default function App() {
     const imgObj = group._maskedImage as fabric.Image;
     const frameObj = group._frameShape as fabric.Object;
 
-    // グループ解体して個別に配置
     canvas.remove(group);
 
     const frameData = {
@@ -427,11 +442,10 @@ export default function App() {
       scaleX: 1,
       scaleY: 1,
       angle: group.angle || 0,
-      stroke: frameObj.stroke || '#000000',
+      stroke: frameObj.stroke || activeInkColor,
       strokeWidth: frameObj.strokeWidth || 4,
     };
 
-    // ガイド用固定枠線
     let guideFrame: fabric.Object;
     if (frameData.type === 'circle') {
       guideFrame = new fabric.Circle({
@@ -476,7 +490,6 @@ export default function App() {
       frameObj: guideFrame,
     };
 
-    // 移動・拡大・回転中のリアルタイムマスク更新
     const handleTransform = () => {
       updateImageClipPath(imgObj, frameData);
       canvas.renderAll();
@@ -507,7 +520,6 @@ export default function App() {
     maskEditingCtxRef.current = null;
     setIsEditingMaskMode(false);
 
-    // 再度グループを作成
     createMaskGroup(imgObj, frameObj);
   };
 
@@ -550,6 +562,38 @@ export default function App() {
     }
   };
 
+  // インク・オブジェクトカラーの変更
+  const changeInkColor = (hex: string) => {
+    setActiveInkColor(hex);
+    if (!fabricCanvas) return;
+
+    const activeObj = fabricCanvas.getActiveObject() as any;
+    if (!activeObj) return;
+
+    if (activeObj.type === 'i-text') {
+      activeObj.set('fill', hex);
+    } else if (activeObj.type === 'rect' || activeObj.type === 'circle') {
+      activeObj.set('stroke', hex);
+    } else if (activeObj._isMaskGroup) {
+      const frame = activeObj.getObjects().find((o: any) => o.type !== 'image');
+      if (frame) frame.set('stroke', hex);
+
+      const targetImg = activeObj._maskedImage;
+      if (targetImg && targetImg._originalImg) {
+        const newCanvas = applyMonochromeFilter(targetImg._originalImg, threshold, hex);
+        targetImg.setElement(newCanvas);
+        targetImg._inkColor = hex;
+      }
+    } else if (activeObj.type === 'image' && activeObj._originalImg) {
+      const newCanvas = applyMonochromeFilter(activeObj._originalImg, threshold, hex);
+      activeObj.setElement(newCanvas);
+      activeObj._inkColor = hex;
+    }
+
+    fabricCanvas.renderAll();
+    saveHistory(fabricCanvas);
+  };
+
   const addText = (isTitle: boolean) => {
     if (!fabricCanvas) return;
     const size = isTitle ? 36 : 18;
@@ -559,7 +603,7 @@ export default function App() {
       fontFamily: fontFamily,
       fontSize: size,
       fontWeight: isTitle ? 'bold' : 'normal',
-      fill: '#000000',
+      fill: activeInkColor,
     });
     fabricCanvas.add(text);
     fabricCanvas.setActiveObject(text);
@@ -574,7 +618,7 @@ export default function App() {
       width: 160,
       height: 160,
       fill: 'transparent',
-      stroke: '#000000',
+      stroke: activeInkColor,
       strokeWidth: sw,
       originX: 'center',
       originY: 'center',
@@ -591,7 +635,7 @@ export default function App() {
       top: 150,
       radius: 80,
       fill: 'transparent',
-      stroke: '#000000',
+      stroke: activeInkColor,
       strokeWidth: sw,
       originX: 'center',
       originY: 'center',
@@ -642,11 +686,15 @@ export default function App() {
     }
   };
 
-  const applyMonochromeFilter = (imgElement: HTMLImageElement, threshValue: number) => {
+  // 画像の色（インクカラー）フィルター処理
+  const applyMonochromeFilter = (imgElement: HTMLImageElement, threshValue: number, colorHex: string) => {
     const tempCanvas = document.createElement('canvas');
     const ctx = tempCanvas.getContext('2d');
     tempCanvas.width = imgElement.width;
     tempCanvas.height = imgElement.height;
+
+    const matchedInk = INK_COLORS.find((c) => c.hex === colorHex) || INK_COLORS[0];
+    const [r, g, b] = matchedInk.rgb;
 
     if (ctx) {
       ctx.drawImage(imgElement, 0, 0);
@@ -656,9 +704,9 @@ export default function App() {
       for (let i = 0; i < data.length; i += 4) {
         const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
         if (avg < threshValue) {
-          data[i] = 0;
-          data[i + 1] = 0;
-          data[i + 2] = 0;
+          data[i] = r;
+          data[i + 1] = g;
+          data[i + 2] = b;
           data[i + 3] = 255;
         } else {
           data[i + 3] = 0;
@@ -678,7 +726,7 @@ export default function App() {
       const imgObj = new Image();
       imgObj.src = event.target?.result as string;
       imgObj.onload = () => {
-        const convertedCanvas = applyMonochromeFilter(imgObj, threshold);
+        const convertedCanvas = applyMonochromeFilter(imgObj, threshold, activeInkColor);
         const fabricImg = new fabric.Image(convertedCanvas, {
           left: 150,
           top: 150,
@@ -686,6 +734,7 @@ export default function App() {
           originY: 'center',
         });
         (fabricImg as any)._originalImg = imgObj;
+        (fabricImg as any)._inkColor = activeInkColor;
 
         fabricImg.scaleToWidth(200);
         fabricCanvas.add(fabricImg);
@@ -707,7 +756,8 @@ export default function App() {
       }
 
       if (targetImg && targetImg.type === 'image' && targetImg._originalImg) {
-        const newCanvas = applyMonochromeFilter(targetImg._originalImg, newThresh);
+        const color = targetImg._inkColor || activeInkColor;
+        const newCanvas = applyMonochromeFilter(targetImg._originalImg, newThresh, color);
         targetImg.setElement(newCanvas);
         fabricCanvas.renderAll();
         saveHistory(fabricCanvas);
@@ -894,6 +944,28 @@ export default function App() {
         <div style={{ backgroundColor: '#f9fafb', padding: '10px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
           <label style={{ ...labelStyle, marginBottom: '6px' }}>4. 選択中パーツの編集</label>
 
+          {/* テキスト・画像・枠線のインクカラー切り替え */}
+          <div style={{ marginBottom: '10px' }}>
+            <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>プリント（文字・画像）の色</span>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {INK_COLORS.map((ink) => (
+                <button
+                  key={ink.name}
+                  onClick={() => changeInkColor(ink.hex)}
+                  style={{
+                    width: '28px',
+                    height: '28px',
+                    borderRadius: '50%',
+                    backgroundColor: ink.hex,
+                    border: activeInkColor === ink.hex ? '3px solid #000' : '1px solid #d1d5db',
+                    cursor: 'pointer',
+                  }}
+                  title={ink.name}
+                />
+              ))}
+            </div>
+          </div>
+
           <div style={{ marginBottom: '8px' }}>
             <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>線の太さ</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -936,7 +1008,7 @@ export default function App() {
           {(selectedObjectType === 'image' || hasMask || isEditingMaskMode) && (
             <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '8px', marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <div>
-                <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>モノクロ濃淡: {threshold}</span>
+                <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>写真の濃淡: {threshold}</span>
                 <input
                   type="range"
                   min="0"
