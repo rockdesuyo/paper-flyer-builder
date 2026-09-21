@@ -67,6 +67,7 @@ export default function App() {
   // 履歴（Undo）管理
   const historyRef = useRef<string[]>([]);
   const isUndoRedoRef = useRef<boolean>(false);
+  const isBatchLoadingRef = useRef<boolean>(false);
 
   // ドラッグ＆ドロップ状態
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
@@ -79,7 +80,7 @@ export default function App() {
     frameObj: fabric.Object;
   } | null>(null);
 
-  // 端末のフォントを取得する関数
+  // 端末のフォントを取得
   const loadLocalFonts = async () => {
     if ('queryLocalFonts' in window) {
       try {
@@ -118,16 +119,17 @@ export default function App() {
 
   // 状態の保存（Undo用）
   const saveHistory = (canvas: fabric.Canvas) => {
-    if (isUndoRedoRef.current || maskEditingCtxRef.current) return;
+    if (isUndoRedoRef.current || maskEditingCtxRef.current || isBatchLoadingRef.current) return;
     const json = JSON.stringify(
       canvas.toDatalessJSON([
         '_isMaskGroup',
         '_maskedImage',
         '_frameShape',
-        '_originalImg',
+        '_originalImgSrc',
         '_maskFrameData',
         '_inkColor',
         '_customName',
+        '_threshold',
       ])
     );
 
@@ -141,7 +143,7 @@ export default function App() {
     }
   };
 
-  // 1つ前に戻す（Undo）
+  // Undo
   const undo = () => {
     if (!fabricCanvas || historyRef.current.length <= 1) return;
 
@@ -238,7 +240,7 @@ export default function App() {
       guideLinesRef.current.push(line);
     };
 
-    // スマートガイド
+    // ガイド機能
     canvas.on('object:moving', (e) => {
       clearGuides();
       const target = e.target;
@@ -295,6 +297,7 @@ export default function App() {
       if (activeObj) {
         setSelectedObjectType(activeObj.type);
         setHasMask(!!activeObj._isMaskGroup);
+
         if (activeObj.strokeWidth !== undefined) {
           setStrokeWidthInput(String(activeObj.strokeWidth));
         }
@@ -345,7 +348,7 @@ export default function App() {
     };
   }, [selectedSize]);
 
-  // キーボード操作（Undo / 矢印キー微調整）
+  // キーボード操作
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!fabricCanvas) return;
@@ -395,7 +398,7 @@ export default function App() {
     };
   }, [fabricCanvas]);
 
-  // マスクの生成
+  // マスクグループの生成
   const createMaskGroup = (imageObj: fabric.Image, targetShape: fabric.Object) => {
     if (!fabricCanvas) return;
 
@@ -462,7 +465,7 @@ export default function App() {
     saveHistory(fabricCanvas);
   };
 
-  // マスク編集モードへ
+  // マスク編集モード
   const enterMaskEditMode = (canvas: fabric.Canvas, group: any) => {
     if (!group._isMaskGroup || maskEditingCtxRef.current) return;
 
@@ -518,18 +521,13 @@ export default function App() {
     }
 
     (guideFrame as any)._isTempFrame = true;
-
     updateImageClipPath(imgObj, frameData);
 
     canvas.add(imgObj);
     canvas.add(guideFrame);
     canvas.setActiveObject(imgObj);
 
-    maskEditingCtxRef.current = {
-      group,
-      imgObj,
-      frameObj: guideFrame,
-    };
+    maskEditingCtxRef.current = { group, imgObj, frameObj: guideFrame };
 
     const handleTransform = () => {
       updateImageClipPath(imgObj, frameData);
@@ -543,7 +541,7 @@ export default function App() {
     canvas.renderAll();
   };
 
-  // マスク編集モード終了
+  // マスク編集終了
   const exitMaskEditMode = () => {
     if (!fabricCanvas || !maskEditingCtxRef.current) return;
 
@@ -603,7 +601,8 @@ export default function App() {
     }
   };
 
-  const changeInkColor = (hex: string) => {
+  // カラー更新（全体または個別枠・個別に画像のみ）
+  const changeInkColor = (hex: string, targetType: 'all' | 'frame' | 'image' = 'all') => {
     setActiveInkColor(hex);
     if (!fabricCanvas) return;
 
@@ -615,17 +614,25 @@ export default function App() {
     } else if (activeObj.type === 'rect' || activeObj.type === 'circle') {
       activeObj.set('stroke', hex);
     } else if (activeObj._isMaskGroup) {
-      const frame = activeObj.getObjects().find((o: any) => o.type !== 'image');
-      if (frame) frame.set('stroke', hex);
+      const groupObjs = activeObj.getObjects();
+      const frame = groupObjs.find((o: any) => o.type !== 'image');
+      const targetImg = groupObjs.find((o: any) => o.type === 'image') || activeObj._maskedImage;
 
-      const targetImg = activeObj._maskedImage;
-      if (targetImg && targetImg._originalImg) {
-        const newCanvas = applyMonochromeFilter(targetImg._originalImg, threshold, hex);
+      // 枠のカラー更新
+      if ((targetType === 'all' || targetType === 'frame') && frame) {
+        frame.set('stroke', hex);
+      }
+
+      // 画像のカラー更新
+      if ((targetType === 'all' || targetType === 'image') && targetImg && targetImg._originalImgElement) {
+        const thresh = targetImg._threshold || threshold;
+        const newCanvas = applyMonochromeFilter(targetImg._originalImgElement, thresh, hex);
         targetImg.setElement(newCanvas);
         targetImg._inkColor = hex;
       }
-    } else if (activeObj.type === 'image' && activeObj._originalImg) {
-      const newCanvas = applyMonochromeFilter(activeObj._originalImg, threshold, hex);
+    } else if (activeObj.type === 'image' && activeObj._originalImgElement) {
+      const thresh = activeObj._threshold || threshold;
+      const newCanvas = applyMonochromeFilter(activeObj._originalImgElement, thresh, hex);
       activeObj.setElement(newCanvas);
       activeObj._inkColor = hex;
     }
@@ -726,6 +733,7 @@ export default function App() {
     }
   };
 
+  // 2階調モノクロフィルタの適用
   const applyMonochromeFilter = (imgElement: HTMLImageElement, threshValue: number, colorHex: string) => {
     const tempCanvas = document.createElement('canvas');
     const ctx = tempCanvas.getContext('2d');
@@ -762,8 +770,9 @@ export default function App() {
 
     const reader = new FileReader();
     reader.onload = (event) => {
+      const imgSrc = event.target?.result as string;
       const imgObj = new Image();
-      imgObj.src = event.target?.result as string;
+      imgObj.src = imgSrc;
       imgObj.onload = () => {
         const convertedCanvas = applyMonochromeFilter(imgObj, threshold, activeInkColor);
         const fabricImg = new fabric.Image(convertedCanvas, {
@@ -772,8 +781,10 @@ export default function App() {
           originX: 'center',
           originY: 'center',
         });
-        (fabricImg as any)._originalImg = imgObj;
+        (fabricImg as any)._originalImgElement = imgObj;
+        (fabricImg as any)._originalImgSrc = imgSrc;
         (fabricImg as any)._inkColor = activeInkColor;
+        (fabricImg as any)._threshold = threshold;
 
         fabricImg.scaleToWidth(200);
         fabricCanvas.add(fabricImg);
@@ -781,6 +792,7 @@ export default function App() {
       };
     };
     reader.readAsDataURL(file);
+    e.target.value = '';
   };
 
   const updateImageThreshold = (newThresh: number) => {
@@ -791,12 +803,13 @@ export default function App() {
     if (activeObj) {
       let targetImg = activeObj;
       if (activeObj._isMaskGroup) {
-        targetImg = activeObj._maskedImage;
+        targetImg = activeObj.getObjects().find((o: any) => o.type === 'image') || activeObj._maskedImage;
       }
 
-      if (targetImg && targetImg.type === 'image' && targetImg._originalImg) {
+      if (targetImg && targetImg._originalImgElement) {
         const color = targetImg._inkColor || activeInkColor;
-        const newCanvas = applyMonochromeFilter(targetImg._originalImg, newThresh, color);
+        targetImg._threshold = newThresh;
+        const newCanvas = applyMonochromeFilter(targetImg._originalImgElement, newThresh, color);
         targetImg.setElement(newCanvas);
         fabricCanvas.renderAll();
         saveHistory(fabricCanvas);
@@ -804,7 +817,7 @@ export default function App() {
     }
   };
 
-  // ✨ 1. JSON保存時の名前付け機能
+  // JSON保存
   const saveProjectAsJson = () => {
     if (!fabricCanvas) return;
 
@@ -814,16 +827,17 @@ export default function App() {
 
     const defaultName = `flyer_project_${selectedSize}`;
     const fileName = prompt('保存するプロジェクト名を入力してください:', defaultName);
-    if (!fileName) return; // キャンセルされた場合は処理中断
+    if (!fileName) return;
 
     const jsonCanvasData = fabricCanvas.toDatalessJSON([
       '_isMaskGroup',
       '_maskedImage',
       '_frameShape',
-      '_originalImg',
+      '_originalImgSrc',
       '_maskFrameData',
       '_inkColor',
       '_customName',
+      '_threshold',
     ]);
 
     const projectData = {
@@ -844,14 +858,15 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  // JSON読み込み
-  const loadProjectFromJson = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // ✨ JSON読み込み（非同期処理化により、モーダルの連続表示や反映の不具合を解消）
+  const loadProjectFromJson = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !fabricCanvas) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       try {
+        isBatchLoadingRef.current = true;
         const projectData = JSON.parse(event.target?.result as string);
 
         if (projectData.selectedSize && PAPER_SIZES[projectData.selectedSize as keyof typeof PAPER_SIZES]) {
@@ -863,16 +878,64 @@ export default function App() {
         }
 
         if (projectData.canvasData) {
-          fabricCanvas.loadFromJSON(projectData.canvasData, () => {
+          fabricCanvas.loadFromJSON(projectData.canvasData, async () => {
             fabricCanvas.backgroundColor = projectData.paperColor || paperColor;
+
+            // 画像の元データ（_originalImgSrc）からImageエレメントを復元再構築
+            const allObjs = fabricCanvas.getObjects();
+            const processPromises: Promise<void>[] = [];
+
+            allObjs.forEach((obj: any) => {
+              if (obj._isMaskGroup) {
+                const groupObjs = obj.getObjects();
+                const img = groupObjs.find((o: any) => o.type === 'image');
+                if (img && img._originalImgSrc) {
+                  const p = new Promise<void>((resolve) => {
+                    const el = new Image();
+                    el.src = img._originalImgSrc;
+                    el.onload = () => {
+                      img._originalImgElement = el;
+                      const thresh = img._threshold || 128;
+                      const ink = img._inkColor || '#000000';
+                      const filteredCanvas = applyMonochromeFilter(el, thresh, ink);
+                      img.setElement(filteredCanvas);
+                      resolve();
+                    };
+                    el.onerror = () => resolve();
+                  });
+                  processPromises.push(p);
+                }
+              } else if (obj.type === 'image' && obj._originalImgSrc) {
+                const p = new Promise<void>((resolve) => {
+                  const el = new Image();
+                  el.src = obj._originalImgSrc;
+                  el.onload = () => {
+                    obj._originalImgElement = el;
+                    const thresh = obj._threshold || 128;
+                    const ink = obj._inkColor || '#000000';
+                    const filteredCanvas = applyMonochromeFilter(el, thresh, ink);
+                    obj.setElement(filteredCanvas);
+                    resolve();
+                  };
+                  el.onerror = () => resolve();
+                });
+                processPromises.push(p);
+              }
+            });
+
+            await Promise.all(processPromises);
+
             fabricCanvas.renderAll();
             refreshObjectsList(fabricCanvas);
+            isBatchLoadingRef.current = false;
             saveHistory(fabricCanvas);
+
             alert('プロジェクトを読み込みました！');
           });
         }
       } catch (err) {
         console.error('JSON読み込みエラー:', err);
+        isBatchLoadingRef.current = false;
         alert('プロジェクトファイルの読み込みに失敗しました。');
       }
     };
@@ -931,14 +994,11 @@ export default function App() {
     refreshObjectsList(fabricCanvas);
   };
 
-  // ✨ 3. レイヤー順序変更（ワンクリック上・下ボタン）
+  // レイヤー順序変更（▲ 上へ / ▼ 下へ）
   const moveLayer = (index: number, direction: 'up' | 'down') => {
     if (!fabricCanvas) return;
 
-    // objectsListは最前面が0（降順）になっているため
-    // index - 1 が上（より前面）、index + 1 が下（より背面）
     const targetIndex = direction === 'up' ? index - 1 : index + 1;
-
     if (targetIndex < 0 || targetIndex >= objectsList.length) return;
 
     const currentCanvasObjs = fabricCanvas.getObjects().filter((o) => o.type !== 'line');
@@ -956,9 +1016,9 @@ export default function App() {
     }
   };
 
-  // ✨ 2. レイヤーのカスタム名前変更機能
+  // レイヤー名変更
   const renameLayer = (obj: any, e: React.MouseEvent) => {
-    e.stopPropagation(); // 行選択イベントの発生を防止
+    e.stopPropagation();
     const currentName = obj._customName || '';
     const newName = prompt('レイヤーの名前を入力してください:', currentName);
 
@@ -1012,7 +1072,7 @@ export default function App() {
     if (obj._customName && obj._customName.trim() !== '') {
       return obj._customName;
     }
-    if (obj._isMaskGroup) return '🖼️🔲 マスク画像グループ';
+    if (obj._isMaskGroup) return '📦 マスクグループ';
     if (obj.type === 'i-text') {
       const txt = (obj as fabric.IText).text || '';
       return `🔤 ${txt.slice(0, 10)}${txt.length > 10 ? '...' : ''}`;
@@ -1117,27 +1177,79 @@ export default function App() {
         <div style={{ backgroundColor: '#f9fafb', padding: '10px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
           <label style={{ ...labelStyle, marginBottom: '6px' }}>4. 選択中パーツの編集</label>
 
-          {/* インクカラー */}
-          <div style={{ marginBottom: '10px' }}>
-            <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>プリント（文字・画像）の色</span>
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {INK_COLORS.map((ink) => (
-                <button
-                  key={ink.name}
-                  onClick={() => changeInkColor(ink.hex)}
-                  style={{
-                    width: '28px',
-                    height: '28px',
-                    borderRadius: '50%',
-                    backgroundColor: ink.hex,
-                    border: activeInkColor === ink.hex ? '3px solid #000' : '1px solid #d1d5db',
-                    cursor: 'pointer',
-                  }}
-                  title={ink.name}
-                />
-              ))}
+          {/* ✨ グループ選択時の個別色指定パネル */}
+          {hasMask ? (
+            <div style={{ marginBottom: '10px', backgroundColor: '#ffffff', padding: '8px', borderRadius: '6px', border: '1px solid #d1d5db' }}>
+              <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#111827', display: 'block', marginBottom: '6px' }}>
+                🎨 マスクグループの色指定
+              </span>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div>
+                  <span style={{ fontSize: '10px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>全体に適用</span>
+                  <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                    {INK_COLORS.map((ink) => (
+                      <button
+                        key={`all_${ink.name}`}
+                        onClick={() => changeInkColor(ink.hex, 'all')}
+                        style={{ width: '22px', height: '22px', borderRadius: '50%', backgroundColor: ink.hex, border: '1px solid #d1d5db', cursor: 'pointer' }}
+                        title={`全体を${ink.name}にする`}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <span style={{ fontSize: '10px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>枠（外枠線）のみ変更</span>
+                  <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                    {INK_COLORS.map((ink) => (
+                      <button
+                        key={`frame_${ink.name}`}
+                        onClick={() => changeInkColor(ink.hex, 'frame')}
+                        style={{ width: '22px', height: '22px', borderRadius: '50%', backgroundColor: ink.hex, border: '1px solid #d1d5db', cursor: 'pointer' }}
+                        title={`枠を${ink.name}にする`}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <span style={{ fontSize: '10px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>画像（写真）のみ変更</span>
+                  <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                    {INK_COLORS.map((ink) => (
+                      <button
+                        key={`img_${ink.name}`}
+                        onClick={() => changeInkColor(ink.hex, 'image')}
+                        style={{ width: '22px', height: '22px', borderRadius: '50%', backgroundColor: ink.hex, border: '1px solid #d1d5db', cursor: 'pointer' }}
+                        title={`写真を${ink.name}にする`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
+          ) : (
+            /* 通常パーツ用インクカラー選択 */
+            <div style={{ marginBottom: '10px' }}>
+              <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>プリント（文字・画像）の色</span>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                {INK_COLORS.map((ink) => (
+                  <button
+                    key={ink.name}
+                    onClick={() => changeInkColor(ink.hex, 'all')}
+                    style={{
+                      width: '28px',
+                      height: '28px',
+                      borderRadius: '50%',
+                      backgroundColor: ink.hex,
+                      border: activeInkColor === ink.hex ? '3px solid #000' : '1px solid #d1d5db',
+                      cursor: 'pointer',
+                    }}
+                    title={ink.name}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
 
           <div style={{ marginBottom: '8px' }}>
             <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>線の太さ</span>
@@ -1271,97 +1383,113 @@ export default function App() {
               return (
                 <div
                   key={index}
-                  draggable={true}
-                  onDragStart={(e) => handleDragStart(e, index)}
-                  onDragOver={(e) => handleDragOver(e, index)}
-                  onDragLeave={() => setDragOverIndex(null)}
-                  onDragEnd={handleDragEnd}
-                  onDrop={(e) => handleDrop(e, index)}
-                  onClick={() => {
-                    if (fabricCanvas) {
-                      fabricCanvas.setActiveObject(obj);
-                      fabricCanvas.renderAll();
-                    }
-                  }}
-                  style={{
-                    padding: '6px 8px',
-                    fontSize: '12px',
-                    borderRadius: '6px',
-                    border: '2px dashed',
-                    borderColor: isTargeted ? '#2563eb' : isSelected ? '#000000' : '#e5e7eb',
-                    backgroundColor: isTargeted ? '#eff6ff' : isSelected ? '#f3f4f6' : '#ffffff',
-                    opacity: isDragging ? 0.4 : 1,
-                    fontWeight: isSelected ? 'bold' : 'normal',
-                    cursor: 'grab',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '4px',
-                    userSelect: 'none',
-                  }}
+                  style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}
                 >
-                  {/* レイヤー名 ＆ 名前編集ボタン */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', overflow: 'hidden', flex: 1 }}>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {getObjectLabel(obj)}
-                    </span>
-                    <button
-                      onClick={(e) => renameLayer(obj, e)}
-                      style={{
-                        border: 'none',
-                        background: 'none',
-                        cursor: 'pointer',
-                        padding: '0 2px',
-                        fontSize: '11px',
-                        opacity: 0.6,
-                      }}
-                      title="レイヤー名を変更"
-                    >
-                      ✏️
-                    </button>
+                  <div
+                    draggable={true}
+                    onDragStart={(e) => handleDragStart(e, index)}
+                    onDragOver={(e) => handleDragOver(e, index)}
+                    onDragLeave={() => setDragOverIndex(null)}
+                    onDragEnd={handleDragEnd}
+                    onDrop={(e) => handleDrop(e, index)}
+                    onClick={() => {
+                      if (fabricCanvas) {
+                        fabricCanvas.setActiveObject(obj);
+                        fabricCanvas.renderAll();
+                      }
+                    }}
+                    style={{
+                      padding: '6px 8px',
+                      fontSize: '12px',
+                      borderRadius: '6px',
+                      border: '2px dashed',
+                      borderColor: isTargeted ? '#2563eb' : isSelected ? '#000000' : '#e5e7eb',
+                      backgroundColor: isTargeted ? '#eff6ff' : isSelected ? '#f3f4f6' : '#ffffff',
+                      opacity: isDragging ? 0.4 : 1,
+                      fontWeight: isSelected ? 'bold' : 'normal',
+                      cursor: 'grab',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '4px',
+                      userSelect: 'none',
+                    }}
+                  >
+                    {/* レイヤー名 ＆ 名前編集ボタン */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', overflow: 'hidden', flex: 1 }}>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {getObjectLabel(obj)}
+                      </span>
+                      <button
+                        onClick={(e) => renameLayer(obj, e)}
+                        style={{
+                          border: 'none',
+                          background: 'none',
+                          cursor: 'pointer',
+                          padding: '0 2px',
+                          fontSize: '11px',
+                          opacity: 0.6,
+                        }}
+                        title="レイヤー名を変更"
+                      >
+                        ✏️
+                      </button>
+                    </div>
+
+                    {/* 順序変更ボタン (▲ 上へ / ▼ 下へ) */}
+                    <div style={{ display: 'flex', gap: '2px' }}>
+                      <button
+                        disabled={index === 0}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          moveLayer(index, 'up');
+                        }}
+                        style={{
+                          border: '1px solid #d1d5db',
+                          backgroundColor: index === 0 ? '#f3f4f6' : '#ffffff',
+                          color: index === 0 ? '#9ca3af' : '#374151',
+                          borderRadius: '3px',
+                          padding: '2px 4px',
+                          fontSize: '10px',
+                          cursor: index === 0 ? 'default' : 'pointer',
+                        }}
+                        title="前（上）に移動"
+                      >
+                        ▲
+                      </button>
+                      <button
+                        disabled={index === objectsList.length - 1}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          moveLayer(index, 'down');
+                        }}
+                        style={{
+                          border: '1px solid #d1d5db',
+                          backgroundColor: index === objectsList.length - 1 ? '#f3f4f6' : '#ffffff',
+                          color: index === objectsList.length - 1 ? '#9ca3af' : '#374151',
+                          borderRadius: '3px',
+                          padding: '2px 4px',
+                          fontSize: '10px',
+                          cursor: index === objectsList.length - 1 ? 'default' : 'pointer',
+                        }}
+                        title="後（下）に移動"
+                      >
+                        ▼
+                      </button>
+                    </div>
                   </div>
 
-                  {/* 順序変更ボタン (▲ 上へ / ▼ 下へ) */}
-                  <div style={{ display: 'flex', gap: '2px' }}>
-                    <button
-                      disabled={index === 0}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        moveLayer(index, 'up');
-                      }}
-                      style={{
-                        border: '1px solid #d1d5db',
-                        backgroundColor: index === 0 ? '#f3f4f6' : '#ffffff',
-                        color: index === 0 ? '#9ca3af' : '#374151',
-                        borderRadius: '3px',
-                        padding: '2px 4px',
-                        fontSize: '10px',
-                        cursor: index === 0 ? 'default' : 'pointer',
-                      }}
-                      title="前（上）に移動"
-                    >
-                      ▲
-                    </button>
-                    <button
-                      disabled={index === objectsList.length - 1}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        moveLayer(index, 'down');
-                      }}
-                      style={{
-                        border: '1px solid #d1d5db',
-                        backgroundColor: index === objectsList.length - 1 ? '#f3f4f6' : '#ffffff',
-                        color: index === objectsList.length - 1 ? '#9ca3af' : '#374151',
-                        borderRadius: '3px',
-                        padding: '2px 4px',
-                        fontSize: '10px',
-                        cursor: index === objectsList.length - 1 ? 'default' : 'pointer',
-                      }}
-                      title="後（下）に移動"
-                    >
-                      ▼
-                    </button>
-                  </div>
+                  {/* ✨ マスクグループの場合、ツリー展開して内部構成を表示 */}
+                  {obj._isMaskGroup && (
+                    <div style={{ paddingLeft: '16px', display: 'flex', flexDirection: 'column', gap: '2px', borderLeft: '2px solid #e5e7eb', marginLeft: '8px' }}>
+                      <div style={{ fontSize: '11px', color: '#6b7280', padding: '2px 4px', backgroundColor: '#f9fafb', borderRadius: '4px' }}>
+                        ├ 🖼 マスク対象の画像
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#6b7280', padding: '2px 4px', backgroundColor: '#f9fafb', borderRadius: '4px' }}>
+                        └ 🔲 マスク外枠線
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })
