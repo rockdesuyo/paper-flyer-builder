@@ -22,11 +22,12 @@ const INK_COLORS = [
   { name: 'ブラック', hex: '#000000', rgb: [0, 0, 0] },
   { name: 'ブルー', hex: '#0055ff', rgb: [0, 85, 255] },
   { name: 'レッド', hex: '#e60012', rgb: [230, 0, 18] },
+  { name: 'オレンジ', hex: '#ff6600', rgb: [255, 102, 0] },
   { name: '濃いピンク', hex: '#e4007f', rgb: [228, 0, 127] },
   { name: 'グリーン', hex: '#009944', rgb: [0, 153, 68] },
 ];
 
-// リソグラフ表現に映えるデフォルトフォント群（標準搭載OSフォント重視）
+// リソグラフ表現に映えるデフォルトフォント群
 const DEFAULT_FONTS = [
   { name: 'ゴシック体', family: 'sans-serif' },
   { name: '明朝体', family: 'serif' },
@@ -41,6 +42,7 @@ const DEFAULT_FONTS = [
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const jsonFileInputRef = useRef<HTMLInputElement>(null);
   const [fabricCanvas, setFabricCanvas] = useState<fabric.Canvas | null>(null);
 
   const [selectedSize, setSelectedSize] = useState<keyof typeof PAPER_SIZES>('A4');
@@ -87,7 +89,6 @@ export default function App() {
         const availableFonts = await window.queryLocalFonts();
         const fontMap = new Map<string, string>();
 
-        // 重複を除外して取得
         availableFonts.forEach((font: any) => {
           if (!fontMap.has(font.family)) {
             fontMap.set(font.family, font.family);
@@ -279,7 +280,7 @@ export default function App() {
       saveHistory(canvas);
     });
 
-    // ダブルクリックでキャンバス上でダイレクトマスク微調整モードへ
+    // ダブルクリックでマスク編集モードへ
     canvas.on('mouse:dblclick', (e) => {
       const target = e.target as any;
       if (target && target._isMaskGroup) {
@@ -304,7 +305,6 @@ export default function App() {
           setFontFamily((activeObj as fabric.IText).fontFamily);
         }
 
-        // カラーの同期
         if (activeObj.fill && typeof activeObj.fill === 'string') {
           setActiveInkColor(activeObj.fill);
         } else if (activeObj.stroke) {
@@ -603,7 +603,6 @@ export default function App() {
     }
   };
 
-  // インク・オブジェクトカラーの変更
   const changeInkColor = (hex: string) => {
     setActiveInkColor(hex);
     if (!fabricCanvas) return;
@@ -727,7 +726,7 @@ export default function App() {
     }
   };
 
-  // 画像の色（インクカラー）フィルター処理
+  // 画像のモノクロ濃淡・インクカラー変換処理
   const applyMonochromeFilter = (imgElement: HTMLImageElement, threshValue: number, colorHex: string) => {
     const tempCanvas = document.createElement('canvas');
     const ctx = tempCanvas.getContext('2d');
@@ -804,6 +803,77 @@ export default function App() {
         saveHistory(fabricCanvas);
       }
     }
+  };
+
+  // プロジェクト（JSON）の保存
+  const saveProjectAsJson = () => {
+    if (!fabricCanvas) return;
+
+    if (maskEditingCtxRef.current) {
+      exitMaskEditMode();
+    }
+
+    const jsonCanvasData = fabricCanvas.toDatalessJSON([
+      '_isMaskGroup',
+      '_maskedImage',
+      '_frameShape',
+      '_originalImg',
+      '_maskFrameData',
+      '_inkColor',
+    ]);
+
+    const projectData = {
+      version: '1.0',
+      selectedSize,
+      paperColor,
+      canvasData: jsonCanvasData,
+    };
+
+    const jsonString = JSON.stringify(projectData, null, 2);
+    const blob = new Blob([jsonString], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `flyer_project_${selectedSize}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // プロジェクト（JSON）の読み込み
+  const loadProjectFromJson = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !fabricCanvas) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const projectData = JSON.parse(event.target?.result as string);
+
+        if (projectData.selectedSize && PAPER_SIZES[projectData.selectedSize as keyof typeof PAPER_SIZES]) {
+          setSelectedSize(projectData.selectedSize);
+        }
+
+        if (projectData.paperColor) {
+          setPaperColor(projectData.paperColor);
+        }
+
+        if (projectData.canvasData) {
+          fabricCanvas.loadFromJSON(projectData.canvasData, () => {
+            fabricCanvas.backgroundColor = projectData.paperColor || paperColor;
+            fabricCanvas.renderAll();
+            refreshObjectsList(fabricCanvas);
+            saveHistory(fabricCanvas);
+            alert('プロジェクトを読み込みました！');
+          });
+        }
+      } catch (err) {
+        console.error('JSON読み込みエラー:', err);
+        alert('プロジェクトファイルの読み込みに失敗しました。正しいJSONファイルか確認してください。');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
   };
 
   // ドラッグ＆ドロップ処理
@@ -914,6 +984,23 @@ export default function App() {
       <div style={{ width: '320px', backgroundColor: '#ffffff', borderRight: '1px solid #e5e7eb', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px', boxSizing: 'border-box', overflowY: 'auto' }}>
         <h1 style={{ fontSize: '18px', fontWeight: 'bold', margin: '0', color: '#111827' }}>レトロチラシ作成ツール</h1>
 
+        {/* プロジェクト保存・読み込み */}
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <button onClick={saveProjectAsJson} style={{ ...btnStyle, flex: 1, backgroundColor: '#eff6ff', borderColor: '#bfdbfe', color: '#1d4ed8', fontWeight: 'bold', textAlign: 'center' }}>
+            💾 JSON保存
+          </button>
+          <label style={{ ...btnStyle, flex: 1, backgroundColor: '#f0fdf4', borderColor: '#bbf7d0', color: '#15803d', fontWeight: 'bold', textAlign: 'center', cursor: 'pointer' }}>
+            📂 JSON開く
+            <input
+              ref={jsonFileInputRef}
+              type="file"
+              accept=".json,application/json"
+              onChange={loadProjectFromJson}
+              style={{ display: 'none' }}
+            />
+          </label>
+        </div>
+
         {/* 用紙サイズ */}
         <div>
           <label style={labelStyle}>1. 用紙サイズ</label>
@@ -988,7 +1075,7 @@ export default function App() {
           {/* インクカラー */}
           <div style={{ marginBottom: '10px' }}>
             <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>プリント（文字・画像）の色</span>
-            <div style={{ display: 'flex', gap: '8px' }}>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               {INK_COLORS.map((ink) => (
                 <button
                   key={ink.name}
