@@ -26,11 +26,17 @@ const INK_COLORS = [
   { name: 'グリーン', hex: '#009944', rgb: [0, 153, 68] },
 ];
 
+// リソグラフ表現に映えるデフォルトフォント群（標準搭載OSフォント重視）
 const DEFAULT_FONTS = [
   { name: 'ゴシック体', family: 'sans-serif' },
   { name: '明朝体', family: 'serif' },
-  { name: '等幅（レトロ風）', family: 'monospace' },
-  { name: 'インパクト（太字）', family: 'Impact, sans-serif' },
+  { name: '丸ゴシック体（レトロ・親しみ）', family: '"Hiragino Maru Gothic ProN", "HGMaruGothicMPRO", "MotoyaLMaru", "Arial Rounded MT Bold", sans-serif' },
+  { name: '教科書体 / 楷書（レトロ・教育）', family: '"HGKyokashotai", "Yu Mincho", "Kaiti SC", "DFKai-SB", cursive, serif' },
+  { name: '極太明朝（重厚見出し）', family: '"HiraMinProN-W6", "YuMincho Bold", "MS Mincho", serif' },
+  { name: '縦長太字（昭和ポスター風）', family: 'Impact, "Arial Black", "Oswald", sans-serif' },
+  { name: '等幅（レトロワープロ風）', family: '"Courier New", Courier, "MS Gothic", monospace' },
+  { name: '手書き・ポップ風', family: 'fantasy, "Comic Sans MS", "Chalkboard SE", sans-serif' },
+  { name: 'クラシック見出し（欧文風）', family: '"Times New Roman", Times, "Georgia", serif' },
 ];
 
 export default function App() {
