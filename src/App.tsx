@@ -27,7 +27,6 @@ const INK_COLORS = [
   { name: 'グリーン', hex: '#009944', rgb: [0, 153, 68] },
 ];
 
-// リソグラフ表現に映えるデフォルトフォント群
 const DEFAULT_FONTS = [
   { name: 'ゴシック体', family: 'sans-serif' },
   { name: '明朝体', family: 'serif' },
@@ -80,7 +79,7 @@ export default function App() {
     frameObj: fabric.Object;
   } | null>(null);
 
-  // 端末（ローカル）のフォントを取得する関数
+  // 端末のフォントを取得する関数
   const loadLocalFonts = async () => {
     if ('queryLocalFonts' in window) {
       try {
@@ -107,7 +106,7 @@ export default function App() {
         setIsLoadingFonts(false);
       }
     } else {
-      alert('お使いのブラウザ（または環境）はローカルフォント取得機能（Local Fonts API）に対応していません。Chrome / Edge などでお試しください。');
+      alert('お使いのブラウザはローカルフォント取得機能に対応していません。Chrome / Edge などでお試しください。');
     }
   };
 
@@ -128,6 +127,7 @@ export default function App() {
         '_originalImg',
         '_maskFrameData',
         '_inkColor',
+        '_customName',
       ])
     );
 
@@ -160,7 +160,7 @@ export default function App() {
     });
   };
 
-  // 正確な Mask / ClipPath の生成計算
+  // Mask / ClipPath の生成計算
   const updateImageClipPath = (img: fabric.Image, frameData: any) => {
     let clipShape: fabric.Object;
 
@@ -395,7 +395,7 @@ export default function App() {
     };
   }, [fabricCanvas]);
 
-  // マスク（画像＋枠線）の生成
+  // マスクの生成
   const createMaskGroup = (imageObj: fabric.Image, targetShape: fabric.Object) => {
     if (!fabricCanvas) return;
 
@@ -462,7 +462,7 @@ export default function App() {
     saveHistory(fabricCanvas);
   };
 
-  // マスク内部の直接編集モードに入る
+  // マスク編集モードへ
   const enterMaskEditMode = (canvas: fabric.Canvas, group: any) => {
     if (!group._isMaskGroup || maskEditingCtxRef.current) return;
 
@@ -543,7 +543,7 @@ export default function App() {
     canvas.renderAll();
   };
 
-  // 直接編集モードを抜けてグループ化に復帰
+  // マスク編集モード終了
   const exitMaskEditMode = () => {
     if (!fabricCanvas || !maskEditingCtxRef.current) return;
 
@@ -564,7 +564,7 @@ export default function App() {
     createMaskGroup(imgObj, frameObj);
   };
 
-  // マスク（グループ）解除
+  // マスク解除
   const removeMask = () => {
     if (!fabricCanvas) return;
     const activeObj = fabricCanvas.getActiveObject() as any;
@@ -726,7 +726,6 @@ export default function App() {
     }
   };
 
-  // 画像のモノクロ濃淡・インクカラー変換処理
   const applyMonochromeFilter = (imgElement: HTMLImageElement, threshValue: number, colorHex: string) => {
     const tempCanvas = document.createElement('canvas');
     const ctx = tempCanvas.getContext('2d');
@@ -805,13 +804,17 @@ export default function App() {
     }
   };
 
-  // プロジェクト（JSON）の保存
+  // ✨ 1. JSON保存時の名前付け機能
   const saveProjectAsJson = () => {
     if (!fabricCanvas) return;
 
     if (maskEditingCtxRef.current) {
       exitMaskEditMode();
     }
+
+    const defaultName = `flyer_project_${selectedSize}`;
+    const fileName = prompt('保存するプロジェクト名を入力してください:', defaultName);
+    if (!fileName) return; // キャンセルされた場合は処理中断
 
     const jsonCanvasData = fabricCanvas.toDatalessJSON([
       '_isMaskGroup',
@@ -820,6 +823,7 @@ export default function App() {
       '_originalImg',
       '_maskFrameData',
       '_inkColor',
+      '_customName',
     ]);
 
     const projectData = {
@@ -835,12 +839,12 @@ export default function App() {
 
     const link = document.createElement('a');
     link.href = url;
-    link.download = `flyer_project_${selectedSize}.json`;
+    link.download = `${fileName}.json`;
     link.click();
     URL.revokeObjectURL(url);
   };
 
-  // プロジェクト（JSON）の読み込み
+  // JSON読み込み
   const loadProjectFromJson = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !fabricCanvas) return;
@@ -869,7 +873,7 @@ export default function App() {
         }
       } catch (err) {
         console.error('JSON読み込みエラー:', err);
-        alert('プロジェクトファイルの読み込みに失敗しました。正しいJSONファイルか確認してください。');
+        alert('プロジェクトファイルの読み込みに失敗しました。');
       }
     };
     reader.readAsText(file);
@@ -927,6 +931,44 @@ export default function App() {
     refreshObjectsList(fabricCanvas);
   };
 
+  // ✨ 3. レイヤー順序変更（ワンクリック上・下ボタン）
+  const moveLayer = (index: number, direction: 'up' | 'down') => {
+    if (!fabricCanvas) return;
+
+    // objectsListは最前面が0（降順）になっているため
+    // index - 1 が上（より前面）、index + 1 が下（より背面）
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+
+    if (targetIndex < 0 || targetIndex >= objectsList.length) return;
+
+    const currentCanvasObjs = fabricCanvas.getObjects().filter((o) => o.type !== 'line');
+    const draggedObj = objectsList[index];
+    const targetObj = objectsList[targetIndex];
+
+    const realFromIdx = currentCanvasObjs.indexOf(draggedObj);
+    const realTargetIdx = currentCanvasObjs.indexOf(targetObj);
+
+    if (realFromIdx !== -1 && realTargetIdx !== -1) {
+      fabricCanvas.moveObjectTo(draggedObj, realTargetIdx);
+      fabricCanvas.renderAll();
+      refreshObjectsList(fabricCanvas);
+      saveHistory(fabricCanvas);
+    }
+  };
+
+  // ✨ 2. レイヤーのカスタム名前変更機能
+  const renameLayer = (obj: any, e: React.MouseEvent) => {
+    e.stopPropagation(); // 行選択イベントの発生を防止
+    const currentName = obj._customName || '';
+    const newName = prompt('レイヤーの名前を入力してください:', currentName);
+
+    if (newName !== null) {
+      obj._customName = newName.trim();
+      refreshObjectsList(fabricCanvas!);
+      saveHistory(fabricCanvas!);
+    }
+  };
+
   const deleteSelected = () => {
     if (!fabricCanvas) return;
     const activeObjects = fabricCanvas.getActiveObjects();
@@ -967,6 +1009,9 @@ export default function App() {
   };
 
   const getObjectLabel = (obj: any) => {
+    if (obj._customName && obj._customName.trim() !== '') {
+      return obj._customName;
+    }
     if (obj._isMaskGroup) return '🖼️🔲 マスク画像グループ';
     if (obj.type === 'i-text') {
       const txt = (obj as fabric.IText).text || '';
@@ -1211,7 +1256,7 @@ export default function App() {
       </div>
 
       {/* 右レイヤーパネル */}
-      <div style={{ width: '250px', backgroundColor: '#ffffff', borderLeft: '1px solid #e5e7eb', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px', boxSizing: 'border-box' }}>
+      <div style={{ width: '280px', backgroundColor: '#ffffff', borderLeft: '1px solid #e5e7eb', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px', boxSizing: 'border-box' }}>
         <h2 style={{ fontSize: '14px', fontWeight: 'bold', margin: '0', color: '#111827' }}>レイヤー一覧</h2>
 
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -1224,40 +1269,98 @@ export default function App() {
               const isTargeted = dragOverIndex === index;
 
               return (
-                <div key={index} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  <div
-                    draggable={true}
-                    onDragStart={(e) => handleDragStart(e, index)}
-                    onDragOver={(e) => handleDragOver(e, index)}
-                    onDragLeave={() => setDragOverIndex(null)}
-                    onDragEnd={handleDragEnd}
-                    onDrop={(e) => handleDrop(e, index)}
-                    onClick={() => {
-                      if (fabricCanvas) {
-                        fabricCanvas.setActiveObject(obj);
-                        fabricCanvas.renderAll();
-                      }
-                    }}
-                    style={{
-                      padding: '8px 10px',
-                      fontSize: '12px',
-                      borderRadius: '6px',
-                      border: '2px dashed',
-                      borderColor: isTargeted ? '#2563eb' : isSelected ? '#000000' : '#e5e7eb',
-                      backgroundColor: isTargeted ? '#eff6ff' : isSelected ? '#f3f4f6' : '#ffffff',
-                      opacity: isDragging ? 0.4 : 1,
-                      fontWeight: isSelected ? 'bold' : 'normal',
-                      cursor: 'grab',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      userSelect: 'none',
-                    }}
-                  >
+                <div
+                  key={index}
+                  draggable={true}
+                  onDragStart={(e) => handleDragStart(e, index)}
+                  onDragOver={(e) => handleDragOver(e, index)}
+                  onDragLeave={() => setDragOverIndex(null)}
+                  onDragEnd={handleDragEnd}
+                  onDrop={(e) => handleDrop(e, index)}
+                  onClick={() => {
+                    if (fabricCanvas) {
+                      fabricCanvas.setActiveObject(obj);
+                      fabricCanvas.renderAll();
+                    }
+                  }}
+                  style={{
+                    padding: '6px 8px',
+                    fontSize: '12px',
+                    borderRadius: '6px',
+                    border: '2px dashed',
+                    borderColor: isTargeted ? '#2563eb' : isSelected ? '#000000' : '#e5e7eb',
+                    backgroundColor: isTargeted ? '#eff6ff' : isSelected ? '#f3f4f6' : '#ffffff',
+                    opacity: isDragging ? 0.4 : 1,
+                    fontWeight: isSelected ? 'bold' : 'normal',
+                    cursor: 'grab',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '4px',
+                    userSelect: 'none',
+                  }}
+                >
+                  {/* レイヤー名 ＆ 名前編集ボタン */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', overflow: 'hidden', flex: 1 }}>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {getObjectLabel(obj)}
                     </span>
-                    <span style={{ fontSize: '12px', color: '#9ca3af' }}>☰</span>
+                    <button
+                      onClick={(e) => renameLayer(obj, e)}
+                      style={{
+                        border: 'none',
+                        background: 'none',
+                        cursor: 'pointer',
+                        padding: '0 2px',
+                        fontSize: '11px',
+                        opacity: 0.6,
+                      }}
+                      title="レイヤー名を変更"
+                    >
+                      ✏️
+                    </button>
+                  </div>
+
+                  {/* 順序変更ボタン (▲ 上へ / ▼ 下へ) */}
+                  <div style={{ display: 'flex', gap: '2px' }}>
+                    <button
+                      disabled={index === 0}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        moveLayer(index, 'up');
+                      }}
+                      style={{
+                        border: '1px solid #d1d5db',
+                        backgroundColor: index === 0 ? '#f3f4f6' : '#ffffff',
+                        color: index === 0 ? '#9ca3af' : '#374151',
+                        borderRadius: '3px',
+                        padding: '2px 4px',
+                        fontSize: '10px',
+                        cursor: index === 0 ? 'default' : 'pointer',
+                      }}
+                      title="前（上）に移動"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      disabled={index === objectsList.length - 1}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        moveLayer(index, 'down');
+                      }}
+                      style={{
+                        border: '1px solid #d1d5db',
+                        backgroundColor: index === objectsList.length - 1 ? '#f3f4f6' : '#ffffff',
+                        color: index === objectsList.length - 1 ? '#9ca3af' : '#374151',
+                        borderRadius: '3px',
+                        padding: '2px 4px',
+                        fontSize: '10px',
+                        cursor: index === objectsList.length - 1 ? 'default' : 'pointer',
+                      }}
+                      title="後（下）に移動"
+                    >
+                      ▼
+                    </button>
                   </div>
                 </div>
               );
