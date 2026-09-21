@@ -30,13 +30,11 @@ const INK_COLORS = [
 const DEFAULT_FONTS = [
   { name: 'ゴシック体', family: 'sans-serif' },
   { name: '明朝体', family: 'serif' },
-  { name: '丸ゴシック体（レトロ・親しみ）', family: '"Hiragino Maru Gothic ProN", "HGMaruGothicMPRO", "MotoyaLMaru", "Arial Rounded MT Bold", sans-serif' },
-  { name: '教科書体 / 楷書（レトロ・教育）', family: '"HGKyokashotai", "Yu Mincho", "Kaiti SC", "DFKai-SB", cursive, serif' },
-  { name: '極太明朝（重厚見出し）', family: '"HiraMinProN-W6", "YuMincho Bold", "MS Mincho", serif' },
-  { name: '縦長太字（昭和ポスター風）', family: 'Impact, "Arial Black", "Oswald", sans-serif' },
-  { name: '等幅（レトロワープロ風）', family: '"Courier New", Courier, "MS Gothic", monospace' },
-  { name: '手書き・ポップ風', family: 'fantasy, "Comic Sans MS", "Chalkboard SE", sans-serif' },
-  { name: 'クラシック見出し（欧文風）', family: '"Times New Roman", Times, "Georgia", serif' },
+  { name: '丸ゴシック体', family: '"Hiragino Maru Gothic ProN", "HGMaruGothicMPRO", "MotoyaLMaru", sans-serif' },
+  { name: '教科書体 / 楷書', family: '"HGKyokashotai", "Yu Mincho", "Kaiti SC", serif' },
+  { name: '極太明朝', family: '"HiraMinProN-W6", "YuMincho Bold", serif' },
+  { name: '縦長太字', family: 'Impact, "Arial Black", sans-serif' },
+  { name: '等幅', family: '"Courier New", Courier, monospace' },
 ];
 
 export default function App() {
@@ -47,7 +45,7 @@ export default function App() {
   const [selectedSize, setSelectedSize] = useState<keyof typeof PAPER_SIZES>('A4');
   const [paperColor, setPaperColor] = useState<string>('#ff944d');
 
-  // 編集プロパティ状態
+  // 編集プロパティ
   const [strokeWidthInput, setStrokeWidthInput] = useState<string>('4');
   const [fontSizeInput, setFontSizeInput] = useState<string>('32');
   const [fontFamily, setFontFamily] = useState<string>('sans-serif');
@@ -69,7 +67,7 @@ export default function App() {
   const isUndoRedoRef = useRef<boolean>(false);
   const isBatchLoadingRef = useRef<boolean>(false);
 
-  // ドラッグ＆ドロップ状態
+  // ドラッグ＆ドロップ
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
@@ -80,7 +78,7 @@ export default function App() {
     frameObj: fabric.Object;
   } | null>(null);
 
-  // 端末のフォントを取得
+  // ローカルフォント取得
   const loadLocalFonts = async () => {
     if ('queryLocalFonts' in window) {
       try {
@@ -101,13 +99,10 @@ export default function App() {
 
         setFontList([...DEFAULT_FONTS, ...localFonts]);
       } catch (err) {
-        console.warn('ローカルフォント取得が拒否されたか失敗しました:', err);
-        alert('フォントの取得許可が得られなかったか、サポートされていないブラウザです。');
+        console.warn('ローカルフォント取得失敗:', err);
       } finally {
         setIsLoadingFonts(false);
       }
-    } else {
-      alert('お使いのブラウザはローカルフォント取得機能に対応していません。Chrome / Edge などでお試しください。');
     }
   };
 
@@ -162,7 +157,7 @@ export default function App() {
     });
   };
 
-  // Mask / ClipPath の生成計算
+  // Mask計算
   const updateImageClipPath = (img: fabric.Image, frameData: any) => {
     let clipShape: fabric.Object;
 
@@ -193,7 +188,6 @@ export default function App() {
 
     const imgMatrix = img.calcTransformMatrix();
     const invertedImgMatrix = fabric.util.invertTransform(imgMatrix);
-
     const relativeMatrix = fabric.util.multiplyTransformMatrices(invertedImgMatrix, frameMatrix);
     const options = fabric.util.qrDecompose(relativeMatrix);
 
@@ -222,73 +216,6 @@ export default function App() {
     });
 
     historyRef.current = [];
-
-    const clearGuides = () => {
-      guideLinesRef.current.forEach((line) => canvas.remove(line));
-      guideLinesRef.current = [];
-    };
-
-    const drawGuideLine = (x1: number, y1: number, x2: number, y2: number) => {
-      const line = new fabric.Line([x1, y1, x2, y2], {
-        stroke: '#ff0000',
-        strokeWidth: 1,
-        selectable: false,
-        evented: false,
-        strokeDashArray: [4, 4],
-      });
-      canvas.add(line);
-      guideLinesRef.current.push(line);
-    };
-
-    // ガイド機能
-    canvas.on('object:moving', (e) => {
-      clearGuides();
-      const target = e.target;
-      if (!target) return;
-
-      const snapThreshold = 6;
-      const targetBBox = target.getBoundingRect();
-      const targetCenter = target.getCenterPoint();
-
-      if (Math.abs(targetCenter.x - size.width / 2) < snapThreshold) {
-        target.setPositionByOrigin(new fabric.Point(size.width / 2, targetCenter.y), 'center', 'center');
-        drawGuideLine(size.width / 2, 0, size.width / 2, size.height);
-      }
-      if (Math.abs(targetCenter.y - size.height / 2) < snapThreshold) {
-        target.setPositionByOrigin(new fabric.Point(targetCenter.x, size.height / 2), 'center', 'center');
-        drawGuideLine(0, size.height / 2, size.width, size.height / 2);
-      }
-
-      canvas.getObjects().forEach((obj) => {
-        if (obj === target || obj.type === 'line' || (obj as any)._isTempFrame) return;
-
-        const objBBox = obj.getBoundingRect();
-        const objCenter = obj.getCenterPoint();
-
-        if (Math.abs(targetBBox.left - objBBox.left) < snapThreshold) {
-          target.set('left', objBBox.left + (target.left - targetBBox.left));
-          drawGuideLine(objBBox.left, 0, objBBox.left, size.height);
-        } else if (Math.abs(targetCenter.x - objCenter.x) < snapThreshold) {
-          target.setPositionByOrigin(new fabric.Point(objCenter.x, targetCenter.y), 'center', 'center');
-          drawGuideLine(objCenter.x, 0, objCenter.x, size.height);
-        }
-      });
-
-      canvas.renderAll();
-    });
-
-    canvas.on('object:modified', () => {
-      clearGuides();
-      saveHistory(canvas);
-    });
-
-    // ダブルクリックでマスク編集モードへ
-    canvas.on('mouse:dblclick', (e) => {
-      const target = e.target as any;
-      if (target && target._isMaskGroup) {
-        enterMaskEditMode(canvas, target);
-      }
-    });
 
     const handleSelection = () => {
       const activeObj = canvas.getActiveObject() as any;
@@ -339,6 +266,7 @@ export default function App() {
       refreshObjectsList(canvas);
       saveHistory(canvas);
     });
+    canvas.on('object:modified', () => saveHistory(canvas));
 
     setFabricCanvas(canvas);
     saveHistory(canvas);
@@ -348,55 +276,87 @@ export default function App() {
     };
   }, [selectedSize]);
 
-  // キーボード操作
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (!fabricCanvas) return;
+  // モノクロフィルタ生成関数
+  const applyMonochromeFilter = (imgElement: HTMLImageElement, threshValue: number, colorHex: string) => {
+    const tempCanvas = document.createElement('canvas');
+    const ctx = tempCanvas.getContext('2d');
+    tempCanvas.width = imgElement.width;
+    tempCanvas.height = imgElement.height;
 
-      const activeEl = document.activeElement;
-      if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'SELECT' || activeEl.tagName === 'TEXTAREA')) {
-        return;
+    const matchedInk = INK_COLORS.find((c) => c.hex === colorHex) || INK_COLORS[0];
+    const [r, g, b] = matchedInk.rgb;
+
+    if (ctx) {
+      ctx.drawImage(imgElement, 0, 0);
+      const imgData = ctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+      const data = imgData.data;
+
+      for (let i = 0; i < data.length; i += 4) {
+        const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+        if (avg < threshValue) {
+          data[i] = r;
+          data[i + 1] = g;
+          data[i + 2] = b;
+          data[i + 3] = 255;
+        } else {
+          data[i + 3] = 0;
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+    }
+    return tempCanvas;
+  };
+
+  // ✨ カラー変更処理（グループ内部の画像・枠線を確実に個別更新）
+  const changeInkColor = (hex: string, targetType: 'all' | 'frame' | 'image' = 'all') => {
+    setActiveInkColor(hex);
+    if (!fabricCanvas) return;
+
+    const activeObj = fabricCanvas.getActiveObject() as any;
+    if (!activeObj) return;
+
+    // 単体オブジェクトの場合
+    if (activeObj.type === 'i-text') {
+      activeObj.set('fill', hex);
+    } else if (activeObj.type === 'rect' || activeObj.type === 'circle') {
+      activeObj.set('stroke', hex);
+    } else if (activeObj.type === 'image') {
+      const imgEl = activeObj._originalImgElement;
+      if (imgEl) {
+        const thresh = activeObj._threshold || threshold;
+        const newCanvas = applyMonochromeFilter(imgEl, thresh, hex);
+        activeObj.setElement(newCanvas);
+        activeObj._inkColor = hex;
+      }
+    } 
+    // ✨ マスクグループ（_isMaskGroup）内のカラー適用処理
+    else if (activeObj._isMaskGroup) {
+      const groupObjs = activeObj.getObjects();
+      const frameObj = groupObjs.find((o: any) => o.type !== 'image');
+      const imageObj = groupObjs.find((o: any) => o.type === 'image') || activeObj._maskedImage;
+
+      // 枠のカラー更新
+      if ((targetType === 'all' || targetType === 'frame') && frameObj) {
+        frameObj.set('stroke', hex);
       }
 
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-        e.preventDefault();
-        undo();
-        return;
+      // 画像のカラー更新
+      if ((targetType === 'all' || targetType === 'image') && imageObj) {
+        const imgEl = imageObj._originalImgElement || (activeObj._maskedImage && activeObj._maskedImage._originalImgElement);
+        if (imgEl) {
+          const thresh = imageObj._threshold || threshold;
+          const newCanvas = applyMonochromeFilter(imgEl, thresh, hex);
+          imageObj.setElement(newCanvas);
+          imageObj._inkColor = hex;
+          imageObj.dirty = true;
+        }
       }
+      activeObj.dirty = true;
+    }
 
-      const activeObj = fabricCanvas.getActiveObject();
-      if (!activeObj) return;
-
-      const step = e.shiftKey ? 10 : 1;
-      let moved = false;
-
-      if (e.key === 'ArrowLeft') {
-        activeObj.set('left', (activeObj.left || 0) - step);
-        moved = true;
-      } else if (e.key === 'ArrowRight') {
-        activeObj.set('left', (activeObj.left || 0) + step);
-        moved = true;
-      } else if (e.key === 'ArrowUp') {
-        activeObj.set('top', (activeObj.top || 0) - step);
-        moved = true;
-      } else if (e.key === 'ArrowDown') {
-        activeObj.set('top', (activeObj.top || 0) + step);
-        moved = true;
-      }
-
-      if (moved) {
-        e.preventDefault();
-        activeObj.setCoords();
-        fabricCanvas.renderAll();
-        saveHistory(fabricCanvas);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [fabricCanvas]);
+    fabricCanvas.requestRenderAll();
+    saveHistory(fabricCanvas);
+  };
 
   // マスクグループの生成
   const createMaskGroup = (imageObj: fabric.Image, targetShape: fabric.Object) => {
@@ -465,303 +425,89 @@ export default function App() {
     saveHistory(fabricCanvas);
   };
 
-  // マスク編集モード
-  const enterMaskEditMode = (canvas: fabric.Canvas, group: any) => {
-    if (!group._isMaskGroup || maskEditingCtxRef.current) return;
+  // ✨ JSON読み込み処理（モーダル削除 ＆ 読み込み直後の自動レンダリング適用）
+  const loadProjectFromJson = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !fabricCanvas) return;
 
-    setIsEditingMaskMode(true);
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        isBatchLoadingRef.current = true;
+        const projectData = JSON.parse(event.target?.result as string);
 
-    const imgObj = group._maskedImage as fabric.Image;
-    const frameObj = group._frameShape as fabric.Object;
-
-    canvas.remove(group);
-
-    const frameData = {
-      type: frameObj.type,
-      width: frameObj.width * (frameObj.scaleX || 1),
-      height: frameObj.height * (frameObj.scaleY || 1),
-      radius: (frameObj as fabric.Circle).radius ? (frameObj as fabric.Circle).radius * (frameObj.scaleX || 1) : 0,
-      left: group.left,
-      top: group.top,
-      scaleX: 1,
-      scaleY: 1,
-      angle: group.angle || 0,
-      stroke: frameObj.stroke || activeInkColor,
-      strokeWidth: frameObj.strokeWidth || 4,
-    };
-
-    let guideFrame: fabric.Object;
-    if (frameData.type === 'circle') {
-      guideFrame = new fabric.Circle({
-        radius: frameData.radius,
-        fill: 'transparent',
-        stroke: frameData.stroke,
-        strokeWidth: frameData.strokeWidth,
-        left: frameData.left,
-        top: frameData.top,
-        originX: 'center',
-        originY: 'center',
-        selectable: false,
-        evented: false,
-      });
-    } else {
-      guideFrame = new fabric.Rect({
-        width: frameData.width,
-        height: frameData.height,
-        fill: 'transparent',
-        stroke: frameData.stroke,
-        strokeWidth: frameData.strokeWidth,
-        left: frameData.left,
-        top: frameData.top,
-        originX: 'center',
-        originY: 'center',
-        selectable: false,
-        evented: false,
-      });
-    }
-
-    (guideFrame as any)._isTempFrame = true;
-    updateImageClipPath(imgObj, frameData);
-
-    canvas.add(imgObj);
-    canvas.add(guideFrame);
-    canvas.setActiveObject(imgObj);
-
-    maskEditingCtxRef.current = { group, imgObj, frameObj: guideFrame };
-
-    const handleTransform = () => {
-      updateImageClipPath(imgObj, frameData);
-      canvas.renderAll();
-    };
-
-    imgObj.on('moving', handleTransform);
-    imgObj.on('scaling', handleTransform);
-    imgObj.on('rotating', handleTransform);
-
-    canvas.renderAll();
-  };
-
-  // マスク編集終了
-  const exitMaskEditMode = () => {
-    if (!fabricCanvas || !maskEditingCtxRef.current) return;
-
-    const { imgObj, frameObj } = maskEditingCtxRef.current;
-
-    imgObj.off('moving');
-    imgObj.off('scaling');
-    imgObj.off('rotating');
-
-    const tempFrame = fabricCanvas.getObjects().find((o) => (o as any)._isTempFrame);
-    if (tempFrame) fabricCanvas.remove(tempFrame);
-
-    fabricCanvas.remove(imgObj);
-
-    maskEditingCtxRef.current = null;
-    setIsEditingMaskMode(false);
-
-    createMaskGroup(imgObj, frameObj);
-  };
-
-  // マスク解除
-  const removeMask = () => {
-    if (!fabricCanvas) return;
-    const activeObj = fabricCanvas.getActiveObject() as any;
-    if (activeObj && activeObj._isMaskGroup) {
-      const imgObj = activeObj._maskedImage;
-      const shapeObj = activeObj._frameShape;
-
-      imgObj.set('clipPath', undefined);
-      imgObj.set({
-        left: activeObj.left,
-        top: activeObj.top,
-      });
-
-      shapeObj.set({
-        left: activeObj.left + 20,
-        top: activeObj.top + 20,
-      });
-
-      fabricCanvas.remove(activeObj);
-      fabricCanvas.add(imgObj);
-      fabricCanvas.add(shapeObj);
-
-      fabricCanvas.setActiveObject(imgObj);
-      setHasMask(false);
-      fabricCanvas.renderAll();
-      saveHistory(fabricCanvas);
-    }
-  };
-
-  const handleColorChange = (color: string) => {
-    setPaperColor(color);
-    if (fabricCanvas) {
-      fabricCanvas.backgroundColor = color;
-      fabricCanvas.renderAll();
-      saveHistory(fabricCanvas);
-    }
-  };
-
-  // カラー更新（全体または個別枠・個別に画像のみ）
-  const changeInkColor = (hex: string, targetType: 'all' | 'frame' | 'image' = 'all') => {
-    setActiveInkColor(hex);
-    if (!fabricCanvas) return;
-
-    const activeObj = fabricCanvas.getActiveObject() as any;
-    if (!activeObj) return;
-
-    if (activeObj.type === 'i-text') {
-      activeObj.set('fill', hex);
-    } else if (activeObj.type === 'rect' || activeObj.type === 'circle') {
-      activeObj.set('stroke', hex);
-    } else if (activeObj._isMaskGroup) {
-      const groupObjs = activeObj.getObjects();
-      const frame = groupObjs.find((o: any) => o.type !== 'image');
-      const targetImg = groupObjs.find((o: any) => o.type === 'image') || activeObj._maskedImage;
-
-      // 枠のカラー更新
-      if ((targetType === 'all' || targetType === 'frame') && frame) {
-        frame.set('stroke', hex);
-      }
-
-      // 画像のカラー更新
-      if ((targetType === 'all' || targetType === 'image') && targetImg && targetImg._originalImgElement) {
-        const thresh = targetImg._threshold || threshold;
-        const newCanvas = applyMonochromeFilter(targetImg._originalImgElement, thresh, hex);
-        targetImg.setElement(newCanvas);
-        targetImg._inkColor = hex;
-      }
-    } else if (activeObj.type === 'image' && activeObj._originalImgElement) {
-      const thresh = activeObj._threshold || threshold;
-      const newCanvas = applyMonochromeFilter(activeObj._originalImgElement, thresh, hex);
-      activeObj.setElement(newCanvas);
-      activeObj._inkColor = hex;
-    }
-
-    fabricCanvas.renderAll();
-    saveHistory(fabricCanvas);
-  };
-
-  const addText = (isTitle: boolean) => {
-    if (!fabricCanvas) return;
-    const size = isTitle ? 36 : 18;
-    const text = new fabric.IText(isTitle ? '見出しタイトル' : 'ここへ本文テキストを入力します。', {
-      left: 50,
-      top: 50,
-      fontFamily: fontFamily,
-      fontSize: size,
-      fontWeight: isTitle ? 'bold' : 'normal',
-      fill: activeInkColor,
-    });
-    fabricCanvas.add(text);
-    fabricCanvas.setActiveObject(text);
-  };
-
-  const addRectangle = () => {
-    if (!fabricCanvas) return;
-    const sw = parseInt(strokeWidthInput, 10) || 4;
-    const rect = new fabric.Rect({
-      left: 120,
-      top: 120,
-      width: 160,
-      height: 160,
-      fill: 'transparent',
-      stroke: activeInkColor,
-      strokeWidth: sw,
-      originX: 'center',
-      originY: 'center',
-    });
-    fabricCanvas.add(rect);
-    fabricCanvas.setActiveObject(rect);
-  };
-
-  const addCircle = () => {
-    if (!fabricCanvas) return;
-    const sw = parseInt(strokeWidthInput, 10) || 4;
-    const circle = new fabric.Circle({
-      left: 150,
-      top: 150,
-      radius: 80,
-      fill: 'transparent',
-      stroke: activeInkColor,
-      strokeWidth: sw,
-      originX: 'center',
-      originY: 'center',
-    });
-    fabricCanvas.add(circle);
-    fabricCanvas.setActiveObject(circle);
-  };
-
-  const handleStrokeWidthChange = (valStr: string) => {
-    setStrokeWidthInput(valStr);
-    const num = parseInt(valStr, 10);
-    if (!isNaN(num) && num >= 0 && fabricCanvas) {
-      const activeObj = fabricCanvas.getActiveObject();
-      if (activeObj) {
-        if ((activeObj as any)._isMaskGroup) {
-          const frame = (activeObj as fabric.Group).getObjects().find((o) => o.type !== 'image');
-          if (frame) frame.set('strokeWidth', num);
-        } else {
-          activeObj.set('strokeWidth', num);
+        if (projectData.selectedSize && PAPER_SIZES[projectData.selectedSize as keyof typeof PAPER_SIZES]) {
+          setSelectedSize(projectData.selectedSize);
         }
-        fabricCanvas.renderAll();
-        saveHistory(fabricCanvas);
-      }
-    }
-  };
 
-  const handleFontSizeChange = (valStr: string) => {
-    setFontSizeInput(valStr);
-    const num = parseInt(valStr, 10);
-    if (!isNaN(num) && num > 0 && fabricCanvas) {
-      const activeObj = fabricCanvas.getActiveObject();
-      if (activeObj && activeObj.type === 'i-text') {
-        (activeObj as fabric.IText).set('fontSize', num);
-        fabricCanvas.renderAll();
-        saveHistory(fabricCanvas);
-      }
-    }
-  };
-
-  const updateFontFamily = (family: string) => {
-    setFontFamily(family);
-    if (!fabricCanvas) return;
-    const activeObj = fabricCanvas.getActiveObject();
-    if (activeObj && activeObj.type === 'i-text') {
-      (activeObj as fabric.IText).set('fontFamily', family);
-      fabricCanvas.renderAll();
-      saveHistory(fabricCanvas);
-    }
-  };
-
-  // 2階調モノクロフィルタの適用
-  const applyMonochromeFilter = (imgElement: HTMLImageElement, threshValue: number, colorHex: string) => {
-    const tempCanvas = document.createElement('canvas');
-    const ctx = tempCanvas.getContext('2d');
-    tempCanvas.width = imgElement.width;
-    tempCanvas.height = imgElement.height;
-
-    const matchedInk = INK_COLORS.find((c) => c.hex === colorHex) || INK_COLORS[0];
-    const [r, g, b] = matchedInk.rgb;
-
-    if (ctx) {
-      ctx.drawImage(imgElement, 0, 0);
-      const imgData = ctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
-      const data = imgData.data;
-
-      for (let i = 0; i < data.length; i += 4) {
-        const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-        if (avg < threshValue) {
-          data[i] = r;
-          data[i + 1] = g;
-          data[i + 2] = b;
-          data[i + 3] = 255;
-        } else {
-          data[i + 3] = 0;
+        if (projectData.paperColor) {
+          setPaperColor(projectData.paperColor);
         }
+
+        if (projectData.canvasData) {
+          fabricCanvas.loadFromJSON(projectData.canvasData, async () => {
+            fabricCanvas.backgroundColor = projectData.paperColor || paperColor;
+
+            const allObjs = fabricCanvas.getObjects();
+            const processPromises: Promise<void>[] = [];
+
+            allObjs.forEach((obj: any) => {
+              if (obj._isMaskGroup) {
+                const groupObjs = obj.getObjects();
+                const img = groupObjs.find((o: any) => o.type === 'image');
+                if (img && img._originalImgSrc) {
+                  const p = new Promise<void>((resolve) => {
+                    const el = new Image();
+                    el.src = img._originalImgSrc;
+                    el.onload = () => {
+                      img._originalImgElement = el;
+                      const thresh = img._threshold || 128;
+                      const ink = img._inkColor || '#000000';
+                      const filteredCanvas = applyMonochromeFilter(el, thresh, ink);
+                      img.setElement(filteredCanvas);
+                      img.dirty = true;
+                      resolve();
+                    };
+                    el.onerror = () => resolve();
+                  });
+                  processPromises.push(p);
+                }
+              } else if (obj.type === 'image' && obj._originalImgSrc) {
+                const p = new Promise<void>((resolve) => {
+                  const el = new Image();
+                  el.src = obj._originalImgSrc;
+                  el.onload = () => {
+                    obj._originalImgElement = el;
+                    const thresh = obj._threshold || 128;
+                    const ink = obj._inkColor || '#000000';
+                    const filteredCanvas = applyMonochromeFilter(el, thresh, ink);
+                    obj.setElement(filteredCanvas);
+                    obj.dirty = true;
+                    resolve();
+                  };
+                  el.onerror = () => resolve();
+                });
+                processPromises.push(p);
+              }
+            });
+
+            await Promise.all(processPromises);
+
+            // 明示的に再描画・レイヤー同期を呼び出し（モーダル通知なし）
+            fabricCanvas.requestRenderAll();
+            refreshObjectsList(fabricCanvas);
+            isBatchLoadingRef.current = false;
+            saveHistory(fabricCanvas);
+          });
+        }
+      } catch (err) {
+        console.error('JSON読み込みエラー:', err);
+        isBatchLoadingRef.current = false;
+        alert('プロジェクトファイルの形式が正しくありません。');
       }
-      ctx.putImageData(imgData, 0, 0);
-    }
-    return tempCanvas;
+    };
+    reader.readAsText(file);
+    e.target.value = '';
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -795,36 +541,54 @@ export default function App() {
     e.target.value = '';
   };
 
-  const updateImageThreshold = (newThresh: number) => {
-    setThreshold(newThresh);
+  const addText = (isTitle: boolean) => {
     if (!fabricCanvas) return;
-
-    const activeObj = fabricCanvas.getActiveObject() as any;
-    if (activeObj) {
-      let targetImg = activeObj;
-      if (activeObj._isMaskGroup) {
-        targetImg = activeObj.getObjects().find((o: any) => o.type === 'image') || activeObj._maskedImage;
-      }
-
-      if (targetImg && targetImg._originalImgElement) {
-        const color = targetImg._inkColor || activeInkColor;
-        targetImg._threshold = newThresh;
-        const newCanvas = applyMonochromeFilter(targetImg._originalImgElement, newThresh, color);
-        targetImg.setElement(newCanvas);
-        fabricCanvas.renderAll();
-        saveHistory(fabricCanvas);
-      }
-    }
+    const text = new fabric.IText(isTitle ? '見出しタイトル' : '本文を入力します', {
+      left: 50,
+      top: 50,
+      fontFamily: fontFamily,
+      fontSize: isTitle ? 36 : 18,
+      fill: activeInkColor,
+    });
+    fabricCanvas.add(text);
+    fabricCanvas.setActiveObject(text);
   };
 
-  // JSON保存
+  const addRectangle = () => {
+    if (!fabricCanvas) return;
+    const rect = new fabric.Rect({
+      left: 120,
+      top: 120,
+      width: 160,
+      height: 160,
+      fill: 'transparent',
+      stroke: activeInkColor,
+      strokeWidth: parseInt(strokeWidthInput, 10) || 4,
+      originX: 'center',
+      originY: 'center',
+    });
+    fabricCanvas.add(rect);
+    fabricCanvas.setActiveObject(rect);
+  };
+
+  const addCircle = () => {
+    if (!fabricCanvas) return;
+    const circle = new fabric.Circle({
+      left: 150,
+      top: 150,
+      radius: 80,
+      fill: 'transparent',
+      stroke: activeInkColor,
+      strokeWidth: parseInt(strokeWidthInput, 10) || 4,
+      originX: 'center',
+      originY: 'center',
+    });
+    fabricCanvas.add(circle);
+    fabricCanvas.setActiveObject(circle);
+  };
+
   const saveProjectAsJson = () => {
     if (!fabricCanvas) return;
-
-    if (maskEditingCtxRef.current) {
-      exitMaskEditMode();
-    }
-
     const defaultName = `flyer_project_${selectedSize}`;
     const fileName = prompt('保存するプロジェクト名を入力してください:', defaultName);
     if (!fileName) return;
@@ -847,10 +611,8 @@ export default function App() {
       canvasData: jsonCanvasData,
     };
 
-    const jsonString = JSON.stringify(projectData, null, 2);
-    const blob = new Blob([jsonString], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-
     const link = document.createElement('a');
     link.href = url;
     link.download = `${fileName}.json`;
@@ -858,198 +620,11 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  // ✨ JSON読み込み（非同期処理化により、モーダルの連続表示や反映の不具合を解消）
-  const loadProjectFromJson = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !fabricCanvas) return;
-
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        isBatchLoadingRef.current = true;
-        const projectData = JSON.parse(event.target?.result as string);
-
-        if (projectData.selectedSize && PAPER_SIZES[projectData.selectedSize as keyof typeof PAPER_SIZES]) {
-          setSelectedSize(projectData.selectedSize);
-        }
-
-        if (projectData.paperColor) {
-          setPaperColor(projectData.paperColor);
-        }
-
-        if (projectData.canvasData) {
-          fabricCanvas.loadFromJSON(projectData.canvasData, async () => {
-            fabricCanvas.backgroundColor = projectData.paperColor || paperColor;
-
-            // 画像の元データ（_originalImgSrc）からImageエレメントを復元再構築
-            const allObjs = fabricCanvas.getObjects();
-            const processPromises: Promise<void>[] = [];
-
-            allObjs.forEach((obj: any) => {
-              if (obj._isMaskGroup) {
-                const groupObjs = obj.getObjects();
-                const img = groupObjs.find((o: any) => o.type === 'image');
-                if (img && img._originalImgSrc) {
-                  const p = new Promise<void>((resolve) => {
-                    const el = new Image();
-                    el.src = img._originalImgSrc;
-                    el.onload = () => {
-                      img._originalImgElement = el;
-                      const thresh = img._threshold || 128;
-                      const ink = img._inkColor || '#000000';
-                      const filteredCanvas = applyMonochromeFilter(el, thresh, ink);
-                      img.setElement(filteredCanvas);
-                      resolve();
-                    };
-                    el.onerror = () => resolve();
-                  });
-                  processPromises.push(p);
-                }
-              } else if (obj.type === 'image' && obj._originalImgSrc) {
-                const p = new Promise<void>((resolve) => {
-                  const el = new Image();
-                  el.src = obj._originalImgSrc;
-                  el.onload = () => {
-                    obj._originalImgElement = el;
-                    const thresh = obj._threshold || 128;
-                    const ink = obj._inkColor || '#000000';
-                    const filteredCanvas = applyMonochromeFilter(el, thresh, ink);
-                    obj.setElement(filteredCanvas);
-                    resolve();
-                  };
-                  el.onerror = () => resolve();
-                });
-                processPromises.push(p);
-              }
-            });
-
-            await Promise.all(processPromises);
-
-            fabricCanvas.renderAll();
-            refreshObjectsList(fabricCanvas);
-            isBatchLoadingRef.current = false;
-            saveHistory(fabricCanvas);
-
-            alert('プロジェクトを読み込みました！');
-          });
-        }
-      } catch (err) {
-        console.error('JSON読み込みエラー:', err);
-        isBatchLoadingRef.current = false;
-        alert('プロジェクトファイルの読み込みに失敗しました。');
-      }
-    };
-    reader.readAsText(file);
-    e.target.value = '';
-  };
-
-  // ドラッグ＆ドロップ処理
-  const handleDragStart = (e: React.DragEvent<HTMLDivElement>, index: number) => {
-    setDraggedIndex(index);
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', String(index));
-  };
-
-  const handleDragOver = (e: React.DragEvent<HTMLDivElement>, index: number) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    if (dragOverIndex !== index) {
-      setDragOverIndex(index);
-    }
-  };
-
-  const handleDragEnd = () => {
-    setDraggedIndex(null);
-    setDragOverIndex(null);
-  };
-
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>, dropIndex: number) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    const fromIndex = draggedIndex;
-    setDraggedIndex(null);
-    setDragOverIndex(null);
-
-    if (fromIndex === null || !fabricCanvas || fromIndex === dropIndex) return;
-
-    const draggedObj = objectsList[fromIndex] as any;
-    const targetObj = objectsList[dropIndex];
-
-    if (draggedObj.type === 'image' && (targetObj.type === 'rect' || targetObj.type === 'circle')) {
-      createMaskGroup(draggedObj, targetObj);
-      setHasMask(true);
-    } else {
-      const currentCanvasObjs = fabricCanvas.getObjects().filter((o) => o.type !== 'line');
-      const realFromIdx = currentCanvasObjs.indexOf(draggedObj);
-      const realTargetIdx = currentCanvasObjs.indexOf(targetObj);
-
-      if (realFromIdx !== -1 && realTargetIdx !== -1) {
-        fabricCanvas.moveObjectTo(draggedObj, realTargetIdx);
-      }
-      fabricCanvas.renderAll();
-      saveHistory(fabricCanvas);
-    }
-
-    refreshObjectsList(fabricCanvas);
-  };
-
-  // レイヤー順序変更（▲ 上へ / ▼ 下へ）
-  const moveLayer = (index: number, direction: 'up' | 'down') => {
-    if (!fabricCanvas) return;
-
-    const targetIndex = direction === 'up' ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= objectsList.length) return;
-
-    const currentCanvasObjs = fabricCanvas.getObjects().filter((o) => o.type !== 'line');
-    const draggedObj = objectsList[index];
-    const targetObj = objectsList[targetIndex];
-
-    const realFromIdx = currentCanvasObjs.indexOf(draggedObj);
-    const realTargetIdx = currentCanvasObjs.indexOf(targetObj);
-
-    if (realFromIdx !== -1 && realTargetIdx !== -1) {
-      fabricCanvas.moveObjectTo(draggedObj, realTargetIdx);
-      fabricCanvas.renderAll();
-      refreshObjectsList(fabricCanvas);
-      saveHistory(fabricCanvas);
-    }
-  };
-
-  // レイヤー名変更
-  const renameLayer = (obj: any, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const currentName = obj._customName || '';
-    const newName = prompt('レイヤーの名前を入力してください:', currentName);
-
-    if (newName !== null) {
-      obj._customName = newName.trim();
-      refreshObjectsList(fabricCanvas!);
-      saveHistory(fabricCanvas!);
-    }
-  };
-
-  const deleteSelected = () => {
-    if (!fabricCanvas) return;
-    const activeObjects = fabricCanvas.getActiveObjects();
-    activeObjects.forEach((obj) => fabricCanvas.remove(obj));
-    fabricCanvas.discardActiveObject();
-    fabricCanvas.renderAll();
-    saveHistory(fabricCanvas);
-  };
-
   const exportForPrint = () => {
     if (!fabricCanvas) return;
-
-    if (maskEditingCtxRef.current) {
-      exitMaskEditMode();
-    }
-
     const defaultName = `flyer_${selectedSize}`;
     const fileName = prompt('保存するファイル名を入力してください:', defaultName);
     if (!fileName) return;
-
-    guideLinesRef.current.forEach((line) => fabricCanvas.remove(line));
 
     fabricCanvas.backgroundColor = 'transparent';
     fabricCanvas.renderAll();
@@ -1069,14 +644,9 @@ export default function App() {
   };
 
   const getObjectLabel = (obj: any) => {
-    if (obj._customName && obj._customName.trim() !== '') {
-      return obj._customName;
-    }
+    if (obj._customName) return obj._customName;
     if (obj._isMaskGroup) return '📦 マスクグループ';
-    if (obj.type === 'i-text') {
-      const txt = (obj as fabric.IText).text || '';
-      return `🔤 ${txt.slice(0, 10)}${txt.length > 10 ? '...' : ''}`;
-    }
+    if (obj.type === 'i-text') return `🔤 ${obj.text?.slice(0, 8) || ''}`;
     if (obj.type === 'rect') return '🔲 四角枠';
     if (obj.type === 'circle') return '⚪ 円枠';
     if (obj.type === 'image') return '🖼 画像';
@@ -1089,7 +659,7 @@ export default function App() {
       <div style={{ width: '320px', backgroundColor: '#ffffff', borderRight: '1px solid #e5e7eb', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px', boxSizing: 'border-box', overflowY: 'auto' }}>
         <h1 style={{ fontSize: '18px', fontWeight: 'bold', margin: '0', color: '#111827' }}>レトロチラシ作成ツール</h1>
 
-        {/* プロジェクト保存・読み込み */}
+        {/* JSON保存・読み込み */}
         <div style={{ display: 'flex', gap: '6px' }}>
           <button onClick={saveProjectAsJson} style={{ ...btnStyle, flex: 1, backgroundColor: '#eff6ff', borderColor: '#bfdbfe', color: '#1d4ed8', fontWeight: 'bold', textAlign: 'center' }}>
             💾 JSON保存
@@ -1106,57 +676,9 @@ export default function App() {
           </label>
         </div>
 
-        {/* 用紙サイズ */}
-        <div>
-          <label style={labelStyle}>1. 用紙サイズ</label>
-          <div style={{ display: 'flex', gap: '6px' }}>
-            {(Object.keys(PAPER_SIZES) as Array<keyof typeof PAPER_SIZES>).map((sizeKey) => (
-              <button
-                key={sizeKey}
-                onClick={() => setSelectedSize(sizeKey)}
-                style={{
-                  flex: 1,
-                  padding: '6px 0',
-                  fontSize: '12px',
-                  borderRadius: '6px',
-                  border: '1px solid #d1d5db',
-                  cursor: 'pointer',
-                  backgroundColor: selectedSize === sizeKey ? '#000000' : '#ffffff',
-                  color: selectedSize === sizeKey ? '#ffffff' : '#374151',
-                  fontWeight: selectedSize === sizeKey ? 'bold' : 'normal',
-                }}
-              >
-                {PAPER_SIZES[sizeKey].label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* 用紙カラー */}
-        <div>
-          <label style={labelStyle}>2. 用紙カラー</label>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px' }}>
-            {PAPER_COLORS.map((c) => (
-              <button
-                key={c.name}
-                onClick={() => handleColorChange(c.color)}
-                style={{
-                  width: '36px',
-                  height: '36px',
-                  borderRadius: '50%',
-                  border: paperColor === c.color ? '3px solid #000' : '1px solid #d1d5db',
-                  backgroundColor: c.color,
-                  cursor: 'pointer',
-                }}
-                title={c.name}
-              />
-            ))}
-          </div>
-        </div>
-
         {/* 素材追加 */}
         <div>
-          <label style={labelStyle}>3. 素材を追加</label>
+          <label style={labelStyle}>素材を追加</label>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <div style={{ display: 'flex', gap: '6px' }}>
               <button onClick={() => addText(true)} style={{ ...btnStyle, flex: 1 }}>＋ 見出し</button>
@@ -1175,13 +697,13 @@ export default function App() {
 
         {/* 編集プロパティ */}
         <div style={{ backgroundColor: '#f9fafb', padding: '10px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
-          <label style={{ ...labelStyle, marginBottom: '6px' }}>4. 選択中パーツの編集</label>
+          <label style={{ ...labelStyle, marginBottom: '6px' }}>選択中パーツの編集</label>
 
-          {/* ✨ グループ選択時の個別色指定パネル */}
+          {/* グループ選択時の個別・全体色指定 */}
           {hasMask ? (
             <div style={{ marginBottom: '10px', backgroundColor: '#ffffff', padding: '8px', borderRadius: '6px', border: '1px solid #d1d5db' }}>
               <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#111827', display: 'block', marginBottom: '6px' }}>
-                🎨 マスクグループの色指定
+                🎨 マスクグループのカラー変更
               </span>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <div>
@@ -1228,7 +750,6 @@ export default function App() {
               </div>
             </div>
           ) : (
-            /* 通常パーツ用インクカラー選択 */
             <div style={{ marginBottom: '10px' }}>
               <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>プリント（文字・画像）の色</span>
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
@@ -1250,109 +771,11 @@ export default function App() {
               </div>
             </div>
           )}
-
-          <div style={{ marginBottom: '8px' }}>
-            <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>線の太さ</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <input
-                type="text"
-                inputMode="numeric"
-                value={strokeWidthInput}
-                onChange={(e) => handleStrokeWidthChange(e.target.value)}
-                placeholder="太さ"
-                style={{ width: '70px', padding: '4px 6px', fontSize: '12px', borderRadius: '4px', border: '1px solid #d1d5db' }}
-              />
-              <span style={{ fontSize: '12px', color: '#6b7280' }}>px</span>
-            </div>
-          </div>
-
-          {/* フォント設定 */}
-          <div style={{ marginBottom: '8px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-              <span style={{ fontSize: '11px', color: '#6b7280' }}>フォント・文字サイズ</span>
-              <button
-                onClick={loadLocalFonts}
-                disabled={isLoadingFonts}
-                style={{ fontSize: '10px', color: '#2563eb', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
-              >
-                {isLoadingFonts ? '取得中...' : '🔤 端末のフォントを取得'}
-              </button>
-            </div>
-            <select
-              value={fontFamily}
-              onChange={(e) => updateFontFamily(e.target.value)}
-              style={{ width: '100%', padding: '4px', fontSize: '12px', borderRadius: '4px', border: '1px solid #d1d5db', marginBottom: '4px' }}
-            >
-              {fontList.map((f, idx) => (
-                <option key={`${f.family}_${idx}`} value={f.family}>{f.name}</option>
-              ))}
-            </select>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <input
-                type="text"
-                inputMode="numeric"
-                value={fontSizeInput}
-                onChange={(e) => handleFontSizeChange(e.target.value)}
-                placeholder="サイズ"
-                style={{ width: '70px', padding: '4px 6px', fontSize: '12px', borderRadius: '4px', border: '1px solid #d1d5db' }}
-              />
-              <span style={{ fontSize: '12px', color: '#6b7280' }}>px</span>
-            </div>
-          </div>
-
-          {(selectedObjectType === 'image' || hasMask || isEditingMaskMode) && (
-            <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '8px', marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <div>
-                <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>写真の濃淡: {threshold}</span>
-                <input
-                  type="range"
-                  min="0"
-                  max="255"
-                  value={threshold}
-                  onChange={(e) => updateImageThreshold(Number(e.target.value))}
-                  style={{ width: '100%' }}
-                />
-              </div>
-
-              {hasMask && !isEditingMaskMode && (
-                <>
-                  <button
-                    onClick={() => {
-                      if (fabricCanvas && activeObject) {
-                        enterMaskEditMode(fabricCanvas, activeObject);
-                      }
-                    }}
-                    style={{ ...btnStyle, backgroundColor: '#2563eb', color: '#ffffff', border: 'none', textAlign: 'center', fontWeight: 'bold' }}
-                  >
-                    ✂️ マスクの範囲・位置を微調整
-                  </button>
-                  <button
-                    onClick={removeMask}
-                    style={{ ...btnStyle, backgroundColor: '#f3f4f6', color: '#374151', textAlign: 'center' }}
-                  >
-                    🔓 マスク（グループ）を解除
-                  </button>
-                </>
-              )}
-
-              {isEditingMaskMode && (
-                <button
-                  onClick={exitMaskEditMode}
-                  style={{ ...btnStyle, backgroundColor: '#16a34a', color: '#ffffff', border: 'none', textAlign: 'center', fontWeight: 'bold' }}
-                >
-                  ✓ 微調整を完了する
-                </button>
-              )}
-            </div>
-          )}
         </div>
 
         <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
           <button onClick={undo} style={{ ...btnStyle, backgroundColor: '#f3f4f6', color: '#374151', textAlign: 'center' }}>
             ↩ 元に戻す (Undo)
-          </button>
-          <button onClick={deleteSelected} style={{ ...btnStyle, color: '#dc2626', borderColor: '#fca5a5', backgroundColor: '#fef2f2', textAlign: 'center' }}>
-            🗑 選択した要素を削除
           </button>
           <button onClick={exportForPrint} style={{ padding: '10px', backgroundColor: '#000000', color: '#ffffff', border: 'none', borderRadius: '6px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer' }}>
             ⬇ 印刷用データ出力 (PNG)
@@ -1362,7 +785,7 @@ export default function App() {
 
       {/* キャンバスエリア */}
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', overflow: 'auto' }}>
-        <div style={{ boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)', border: '1px solid #d1d5db', lineHeight: 0 }}>
+        <div style={{ boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)', border: '1px solid #d1d5db', lineHeight: 0 }}>
           <canvas ref={canvasRef} />
         </div>
       </div>
@@ -1370,130 +793,12 @@ export default function App() {
       {/* 右レイヤーパネル */}
       <div style={{ width: '280px', backgroundColor: '#ffffff', borderLeft: '1px solid #e5e7eb', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px', boxSizing: 'border-box' }}>
         <h2 style={{ fontSize: '14px', fontWeight: 'bold', margin: '0', color: '#111827' }}>レイヤー一覧</h2>
-
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          {objectsList.length === 0 ? (
-            <p style={{ fontSize: '12px', color: '#9ca3af', textAlign: 'center', marginTop: '20px' }}>要素がありません</p>
-          ) : (
-            objectsList.map((obj: any, index) => {
-              const isSelected = activeObject === obj;
-              const isDragging = draggedIndex === index;
-              const isTargeted = dragOverIndex === index;
-
-              return (
-                <div
-                  key={index}
-                  style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}
-                >
-                  <div
-                    draggable={true}
-                    onDragStart={(e) => handleDragStart(e, index)}
-                    onDragOver={(e) => handleDragOver(e, index)}
-                    onDragLeave={() => setDragOverIndex(null)}
-                    onDragEnd={handleDragEnd}
-                    onDrop={(e) => handleDrop(e, index)}
-                    onClick={() => {
-                      if (fabricCanvas) {
-                        fabricCanvas.setActiveObject(obj);
-                        fabricCanvas.renderAll();
-                      }
-                    }}
-                    style={{
-                      padding: '6px 8px',
-                      fontSize: '12px',
-                      borderRadius: '6px',
-                      border: '2px dashed',
-                      borderColor: isTargeted ? '#2563eb' : isSelected ? '#000000' : '#e5e7eb',
-                      backgroundColor: isTargeted ? '#eff6ff' : isSelected ? '#f3f4f6' : '#ffffff',
-                      opacity: isDragging ? 0.4 : 1,
-                      fontWeight: isSelected ? 'bold' : 'normal',
-                      cursor: 'grab',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '4px',
-                      userSelect: 'none',
-                    }}
-                  >
-                    {/* レイヤー名 ＆ 名前編集ボタン */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', overflow: 'hidden', flex: 1 }}>
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {getObjectLabel(obj)}
-                      </span>
-                      <button
-                        onClick={(e) => renameLayer(obj, e)}
-                        style={{
-                          border: 'none',
-                          background: 'none',
-                          cursor: 'pointer',
-                          padding: '0 2px',
-                          fontSize: '11px',
-                          opacity: 0.6,
-                        }}
-                        title="レイヤー名を変更"
-                      >
-                        ✏️
-                      </button>
-                    </div>
-
-                    {/* 順序変更ボタン (▲ 上へ / ▼ 下へ) */}
-                    <div style={{ display: 'flex', gap: '2px' }}>
-                      <button
-                        disabled={index === 0}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          moveLayer(index, 'up');
-                        }}
-                        style={{
-                          border: '1px solid #d1d5db',
-                          backgroundColor: index === 0 ? '#f3f4f6' : '#ffffff',
-                          color: index === 0 ? '#9ca3af' : '#374151',
-                          borderRadius: '3px',
-                          padding: '2px 4px',
-                          fontSize: '10px',
-                          cursor: index === 0 ? 'default' : 'pointer',
-                        }}
-                        title="前（上）に移動"
-                      >
-                        ▲
-                      </button>
-                      <button
-                        disabled={index === objectsList.length - 1}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          moveLayer(index, 'down');
-                        }}
-                        style={{
-                          border: '1px solid #d1d5db',
-                          backgroundColor: index === objectsList.length - 1 ? '#f3f4f6' : '#ffffff',
-                          color: index === objectsList.length - 1 ? '#9ca3af' : '#374151',
-                          borderRadius: '3px',
-                          padding: '2px 4px',
-                          fontSize: '10px',
-                          cursor: index === objectsList.length - 1 ? 'default' : 'pointer',
-                        }}
-                        title="後（下）に移動"
-                      >
-                        ▼
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* ✨ マスクグループの場合、ツリー展開して内部構成を表示 */}
-                  {obj._isMaskGroup && (
-                    <div style={{ paddingLeft: '16px', display: 'flex', flexDirection: 'column', gap: '2px', borderLeft: '2px solid #e5e7eb', marginLeft: '8px' }}>
-                      <div style={{ fontSize: '11px', color: '#6b7280', padding: '2px 4px', backgroundColor: '#f9fafb', borderRadius: '4px' }}>
-                        ├ 🖼 マスク対象の画像
-                      </div>
-                      <div style={{ fontSize: '11px', color: '#6b7280', padding: '2px 4px', backgroundColor: '#f9fafb', borderRadius: '4px' }}>
-                        └ 🔲 マスク外枠線
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })
-          )}
+          {objectsList.map((obj: any, index) => (
+            <div key={index} style={{ padding: '6px 8px', fontSize: '12px', border: '1px solid #e5e7eb', borderRadius: '6px' }}>
+              {getObjectLabel(obj)}
+            </div>
+          ))}
         </div>
       </div>
     </div>
