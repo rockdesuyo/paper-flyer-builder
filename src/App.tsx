@@ -40,6 +40,23 @@ const DEFAULT_FONTS = [
   { name: 'クラシック見出し（欧文風）', family: '"Times New Roman", Times, "Georgia", serif' },
 ];
 
+// スタンプ・素材ライブラリ用プリセット
+const STAMP_PRESETS = [
+  { id: 'star_badge', label: '★ SALEバッジ', type: 'shape', path: 'star' },
+  { id: 'ribbon_border', label: '〓 ギザギザ罫線', type: 'shape', path: 'zigzag' },
+  { id: 'stamp_frame', label: '🈹 割印フレーム', type: 'shape', path: 'stamp' },
+  { id: 'retro_arrow', label: '➔ レトロ矢印', type: 'shape', path: 'arrow' },
+];
+
+// 添付画像風の切り抜き・装飾文字スタイル（Ransom Letter / Collage Style）
+const RETRO_TEXT_STYLES = [
+  { label: '切り抜きパンク文字 (A)', text: 'A', bg: '#000000', color: '#ffffff', font: 'Impact', skew: -8 },
+  { label: '切り抜きビンテージ (B)', text: 'B', bg: '#e60012', color: '#ffffff', font: 'Georgia', skew: 5 },
+  { label: '新聞コラージュ (C)', text: 'C', bg: '#ffee93', color: '#000000', font: 'Courier New', skew: -3 },
+  { label: 'ネオンポップ (LIVE)', text: 'LIVE', bg: '#e4007f', color: '#ffffff', font: 'Impact', skew: 6 },
+  { label: 'ギグポスター風 (ROCK)', text: 'ROCK', bg: '#000000', color: '#ff944d', font: 'Arial Black', skew: -10 },
+];
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const jsonFileInputRef = useRef<HTMLInputElement>(null);
@@ -65,6 +82,15 @@ export default function App() {
 
   // 図形塗りつぶし状態
   const [shapeFillColor, setShapeFillColor] = useState<string>('transparent');
+
+  // 自由変形（Skew）
+  const [skewX, setSkewX] = useState<number>(0);
+  const [skewY, setSkewY] = useState<number>(0);
+
+  // ハーフトーン（網点）設定
+  const [halftoneEnabled, setHalftoneEnabled] = useState<boolean>(false);
+  const [halftoneDotSize, setHalftoneDotSize] = useState<number>(6);
+  const [halftoneShape, setHalftoneShape] = useState<'dot' | 'line'>('dot');
 
   // グリッド＆スナップ状態
   const [showGrid, setShowGrid] = useState<boolean>(false);
@@ -141,6 +167,7 @@ export default function App() {
     const json = JSON.stringify(
       canvas.toDatalessJSON([
         '_isMaskGroup',
+        '_isGeneralGroup',
         '_maskedImage',
         '_frameShape',
         '_originalImgSrc',
@@ -148,6 +175,8 @@ export default function App() {
         '_inkColor',
         '_customName',
         '_threshold',
+        '_halftoneDotSize',
+        '_halftoneShape',
         '_isGuideLine',
         '_isGridLine',
       ])
@@ -386,6 +415,8 @@ export default function App() {
       if (activeObj) {
         setSelectedObjectType(activeObj.type);
         setHasMask(!!activeObj._isMaskGroup);
+        setSkewX(activeObj.skewX || 0);
+        setSkewY(activeObj.skewY || 0);
 
         if (activeObj.strokeWidth !== undefined) {
           setStrokeWidthInput(String(activeObj.strokeWidth));
@@ -409,7 +440,7 @@ export default function App() {
         }
 
         // 図形塗りつぶし同期
-        if (activeObj.type === 'rect' || activeObj.type === 'circle') {
+        if (activeObj.type === 'rect' || activeObj.type === 'circle' || activeObj.type === 'path') {
           setShapeFillColor((activeObj.fill as string) || 'transparent');
         }
 
@@ -479,7 +510,6 @@ export default function App() {
       // Delete または Backspace で選択要素の削除
       if (e.key === 'Delete' || e.key === 'Backspace') {
         const activeObj = fabricCanvas.getActiveObject();
-        // テキスト入力編集中の場合はキー操作を妨げない
         if (activeObj && activeObj.type === 'i-text' && (activeObj as fabric.IText).isEditing) {
           return;
         }
@@ -587,6 +617,35 @@ export default function App() {
     fabricCanvas.setActiveObject(group);
     fabricCanvas.renderAll();
     saveHistory(fabricCanvas);
+  };
+
+  // 汎用グループ化（通常オブジェクト・複数選択対応）
+  const createGeneralGroup = () => {
+    if (!fabricCanvas) return;
+    const activeObj = fabricCanvas.getActiveObject();
+    if (!activeObj) return;
+
+    if (activeObj.type === 'activeSelection') {
+      const selection = activeObj as fabric.ActiveSelection;
+      const group = selection.toGroup();
+      (group as any)._isGeneralGroup = true;
+      fabricCanvas.setActiveObject(group);
+      fabricCanvas.renderAll();
+      refreshObjectsList(fabricCanvas);
+      saveHistory(fabricCanvas);
+    }
+  };
+
+  // 汎用グループの解除
+  const ungroupGeneralGroup = () => {
+    if (!fabricCanvas) return;
+    const activeObj = fabricCanvas.getActiveObject() as any;
+    if (activeObj && (activeObj.type === 'group' || activeObj._isGeneralGroup) && !activeObj._isMaskGroup) {
+      activeObj.toActiveSelection();
+      fabricCanvas.renderAll();
+      refreshObjectsList(fabricCanvas);
+      saveHistory(fabricCanvas);
+    }
   };
 
   // マスク編集モード
@@ -735,24 +794,29 @@ export default function App() {
 
     if (activeObj.type === 'i-text') {
       activeObj.set('fill', hex);
-    } else if (activeObj.type === 'rect' || activeObj.type === 'circle') {
-      activeObj.set('stroke', hex);
+    } else if (activeObj.type === 'rect' || activeObj.type === 'circle' || activeObj.type === 'path') {
+      if (activeObj.stroke) activeObj.set('stroke', hex);
+      if (activeObj.fill && activeObj.fill !== 'transparent') activeObj.set('fill', hex);
     } else if (activeObj._isMaskGroup) {
       const groupObjs = activeObj.getObjects();
       const frame = groupObjs.find((o: any) => o.type !== 'image') || activeObj._frameShape;
       const targetImg = groupObjs.find((o: any) => o.type === 'image') || activeObj._maskedImage;
 
-      // 枠のカラー更新
       if ((targetType === 'all' || targetType === 'frame') && frame) {
         frame.set('stroke', hex);
       }
 
-      // 画像のカラー更新
       if ((targetType === 'all' || targetType === 'image') && targetImg) {
         targetImg._inkColor = hex;
         if (targetImg._originalImgElement) {
           const thresh = targetImg._threshold || threshold;
-          const newCanvas = applyMonochromeFilter(targetImg._originalImgElement, thresh, hex);
+          const newCanvas = applyMonochromeFilter(
+            targetImg._originalImgElement,
+            thresh,
+            hex,
+            targetImg._halftoneDotSize,
+            targetImg._halftoneShape
+          );
           targetImg.setElement(newCanvas);
         }
       }
@@ -760,7 +824,13 @@ export default function App() {
       activeObj._inkColor = hex;
       if (activeObj._originalImgElement) {
         const thresh = activeObj._threshold || threshold;
-        const newCanvas = applyMonochromeFilter(activeObj._originalImgElement, thresh, hex);
+        const newCanvas = applyMonochromeFilter(
+          activeObj._originalImgElement,
+          thresh,
+          hex,
+          activeObj._halftoneDotSize,
+          activeObj._halftoneShape
+        );
         activeObj.setElement(newCanvas);
       }
     }
@@ -774,8 +844,24 @@ export default function App() {
     setShapeFillColor(color);
     if (!fabricCanvas) return;
     const activeObj = fabricCanvas.getActiveObject();
-    if (activeObj && (activeObj.type === 'rect' || activeObj.type === 'circle')) {
+    if (activeObj && (activeObj.type === 'rect' || activeObj.type === 'circle' || activeObj.type === 'path')) {
       activeObj.set('fill', color);
+      fabricCanvas.renderAll();
+      saveHistory(fabricCanvas);
+    }
+  };
+
+  // 自由変形（Skew）の更新
+  const handleSkewChange = (axis: 'x' | 'y', val: number) => {
+    if (axis === 'x') setSkewX(val);
+    if (axis === 'y') setSkewY(val);
+
+    if (!fabricCanvas) return;
+    const activeObj = fabricCanvas.getActiveObject();
+    if (activeObj) {
+      if (axis === 'x') activeObj.set('skewX', val);
+      if (axis === 'y') activeObj.set('skewY', val);
+      activeObj.setCoords();
       fabricCanvas.renderAll();
       saveHistory(fabricCanvas);
     }
@@ -832,6 +918,100 @@ export default function App() {
     });
     fabricCanvas.add(circle);
     fabricCanvas.setActiveObject(circle);
+  };
+
+  // レトロスタンプ・パーツプリセット追加
+  const addStampPreset = (presetId: string) => {
+    if (!fabricCanvas) return;
+
+    if (presetId === 'star_badge') {
+      const star = new fabric.Path('M 100 0 L 125 75 L 200 75 L 135 115 L 160 190 L 100 145 L 40 190 L 65 115 L 0 75 L 75 75 Z', {
+        left: 150,
+        top: 150,
+        fill: activeInkColor,
+        stroke: '#000000',
+        strokeWidth: 2,
+        scaleX: 0.8,
+        scaleY: 0.8,
+        originX: 'center',
+        originY: 'center',
+      });
+      fabricCanvas.add(star);
+      fabricCanvas.setActiveObject(star);
+    } else if (presetId === 'ribbon_border') {
+      const pathStr = 'M 0 0 L 20 20 L 40 0 L 60 20 L 80 0 L 100 20 L 120 0 L 140 20 L 160 0 L 180 20 L 200 0';
+      const line = new fabric.Path(pathStr, {
+        left: 150,
+        top: 150,
+        fill: 'transparent',
+        stroke: activeInkColor,
+        strokeWidth: 4,
+        originX: 'center',
+        originY: 'center',
+      });
+      fabricCanvas.add(line);
+      fabricCanvas.setActiveObject(line);
+    } else if (presetId === 'stamp_frame') {
+      const circle = new fabric.Circle({
+        left: 150,
+        top: 150,
+        radius: 60,
+        fill: 'transparent',
+        stroke: activeInkColor,
+        strokeWidth: 6,
+        strokeDashArray: [12, 6],
+        originX: 'center',
+        originY: 'center',
+      });
+      fabricCanvas.add(circle);
+      fabricCanvas.setActiveObject(circle);
+    } else if (presetId === 'retro_arrow') {
+      const arrow = new fabric.Path('M 0 20 L 120 20 L 120 0 L 180 35 L 120 70 L 120 50 L 0 50 Z', {
+        left: 150,
+        top: 150,
+        fill: activeInkColor,
+        originX: 'center',
+        originY: 'center',
+      });
+      fabricCanvas.add(arrow);
+      fabricCanvas.setActiveObject(arrow);
+    }
+  };
+
+  // 切り抜き文字・装飾レタリング素材追加（添付画像スタイル）
+  const addRetroTextStyle = (style: typeof RETRO_TEXT_STYLES[0]) => {
+    if (!fabricCanvas) return;
+
+    const bgRect = new fabric.Rect({
+      width: 70,
+      height: 80,
+      fill: style.bg,
+      originX: 'center',
+      originY: 'center',
+      rx: 4,
+      ry: 4,
+    });
+
+    const txt = new fabric.IText(style.text, {
+      fontFamily: style.font,
+      fontSize: 48,
+      fontWeight: 'bold',
+      fill: style.color,
+      originX: 'center',
+      originY: 'center',
+    });
+
+    const letterGroup = new fabric.Group([bgRect, txt], {
+      left: 150,
+      top: 150,
+      skewX: style.skew,
+      originX: 'center',
+      originY: 'center',
+    });
+
+    (letterGroup as any)._isGeneralGroup = true;
+    fabricCanvas.add(letterGroup);
+    fabricCanvas.setActiveObject(letterGroup);
   };
 
   const handleStrokeWidthChange = (valStr: string) => {
@@ -907,14 +1087,19 @@ export default function App() {
     }
   };
 
-  // 2階調モノクロフィルタの適用（HEXコード解釈）
-  const applyMonochromeFilter = (imgElement: HTMLImageElement, threshValue: number, colorHex: string) => {
+  // 2階調モノクロ ＆ トーン・網点処理（Halftone）フィルタの適用
+  const applyMonochromeFilter = (
+    imgElement: HTMLImageElement,
+    threshValue: number,
+    colorHex: string,
+    dotSize: number = 0,
+    shapeMode: 'dot' | 'line' = 'dot'
+  ) => {
     const tempCanvas = document.createElement('canvas');
     const ctx = tempCanvas.getContext('2d');
     tempCanvas.width = imgElement.width;
     tempCanvas.height = imgElement.height;
 
-    // HEXからRGB値を算出
     let r = 0, g = 0, b = 0;
     if (colorHex.startsWith('#')) {
       const hex = colorHex.replace('#', '');
@@ -934,18 +1119,55 @@ export default function App() {
       const imgData = ctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
       const data = imgData.data;
 
-      for (let i = 0; i < data.length; i += 4) {
-        const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-        if (avg < threshValue) {
-          data[i] = r;
-          data[i + 1] = g;
-          data[i + 2] = b;
-          data[i + 3] = 255;
-        } else {
-          data[i + 3] = 0;
+      // 通常の2階調化
+      if (!dotSize || dotSize <= 1) {
+        for (let i = 0; i < data.length; i += 4) {
+          const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+          if (avg < threshValue) {
+            data[i] = r;
+            data[i + 1] = g;
+            data[i + 2] = b;
+            data[i + 3] = 255;
+          } else {
+            data[i + 3] = 0;
+          }
+        }
+        ctx.putImageData(imgData, 0, 0);
+      } else {
+        // ハーフトーン（網点/ドット）スクリーニング処理
+        ctx.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
+        ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+
+        for (let y = 0; y < tempCanvas.height; y += dotSize) {
+          for (let x = 0; x < tempCanvas.width; x += dotSize) {
+            let totalBrightness = 0;
+            let count = 0;
+
+            for (let dy = 0; dy < dotSize && y + dy < tempCanvas.height; dy++) {
+              for (let dx = 0; dx < dotSize && x + dx < tempCanvas.width; dx++) {
+                const idx = ((y + dy) * tempCanvas.width + (x + dx)) * 4;
+                const brightness = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+                totalBrightness += brightness;
+                count++;
+              }
+            }
+
+            const avgBrightness = count > 0 ? totalBrightness / count : 255;
+            if (avgBrightness < threshValue) {
+              const radius = (dotSize / 2) * (1 - avgBrightness / 255);
+              if (radius > 0.5) {
+                ctx.beginPath();
+                if (shapeMode === 'dot') {
+                  ctx.arc(x + dotSize / 2, y + dotSize / 2, radius, 0, Math.PI * 2);
+                } else {
+                  ctx.rect(x, y + (dotSize - radius * 2) / 2, dotSize, radius * 2);
+                }
+                ctx.fill();
+              }
+            }
+          }
         }
       }
-      ctx.putImageData(imgData, 0, 0);
     }
     return tempCanvas;
   };
@@ -960,7 +1182,7 @@ export default function App() {
       const imgObj = new Image();
       imgObj.src = imgSrc;
       imgObj.onload = () => {
-        const convertedCanvas = applyMonochromeFilter(imgObj, threshold, activeInkColor);
+        const convertedCanvas = applyMonochromeFilter(imgObj, threshold, activeInkColor, halftoneEnabled ? halftoneDotSize : 0, halftoneShape);
         const fabricImg = new fabric.Image(convertedCanvas, {
           left: 150,
           top: 150,
@@ -971,6 +1193,8 @@ export default function App() {
         (fabricImg as any)._originalImgSrc = imgSrc;
         (fabricImg as any)._inkColor = activeInkColor;
         (fabricImg as any)._threshold = threshold;
+        (fabricImg as any)._halftoneDotSize = halftoneEnabled ? halftoneDotSize : 0;
+        (fabricImg as any)._halftoneShape = halftoneShape;
 
         fabricImg.scaleToWidth(200);
         fabricCanvas.add(fabricImg);
@@ -995,7 +1219,42 @@ export default function App() {
       if (targetImg && targetImg._originalImgElement) {
         const color = targetImg._inkColor || activeInkColor;
         targetImg._threshold = newThresh;
-        const newCanvas = applyMonochromeFilter(targetImg._originalImgElement, newThresh, color);
+        const newCanvas = applyMonochromeFilter(
+          targetImg._originalImgElement,
+          newThresh,
+          color,
+          targetImg._halftoneDotSize || (halftoneEnabled ? halftoneDotSize : 0),
+          targetImg._halftoneShape || halftoneShape
+        );
+        targetImg.setElement(newCanvas);
+        fabricCanvas.renderAll();
+        saveHistory(fabricCanvas);
+      }
+    }
+  };
+
+  // ハーフトーン更新処理
+  const updateHalftoneSettings = (enabled: boolean, size: number, shape: 'dot' | 'line') => {
+    setHalftoneEnabled(enabled);
+    setHalftoneDotSize(size);
+    setHalftoneShape(shape);
+
+    if (!fabricCanvas) return;
+    const activeObj = fabricCanvas.getActiveObject() as any;
+    if (activeObj) {
+      let targetImg = activeObj;
+      if (activeObj._isMaskGroup) {
+        targetImg = activeObj.getObjects().find((o: any) => o.type === 'image') || activeObj._maskedImage;
+      }
+
+      if (targetImg && targetImg._originalImgElement) {
+        const color = targetImg._inkColor || activeInkColor;
+        const thresh = targetImg._threshold || threshold;
+        const dotSizeVal = enabled ? size : 0;
+        targetImg._halftoneDotSize = dotSizeVal;
+        targetImg._halftoneShape = shape;
+
+        const newCanvas = applyMonochromeFilter(targetImg._originalImgElement, thresh, color, dotSizeVal, shape);
         targetImg.setElement(newCanvas);
         fabricCanvas.renderAll();
         saveHistory(fabricCanvas);
@@ -1017,6 +1276,7 @@ export default function App() {
 
     const jsonCanvasData = fabricCanvas.toDatalessJSON([
       '_isMaskGroup',
+      '_isGeneralGroup',
       '_maskedImage',
       '_frameShape',
       '_originalImgSrc',
@@ -1024,6 +1284,8 @@ export default function App() {
       '_inkColor',
       '_customName',
       '_threshold',
+      '_halftoneDotSize',
+      '_halftoneShape',
       '_isGuideLine',
       '_isGridLine',
     ]);
@@ -1084,7 +1346,13 @@ export default function App() {
                       img._originalImgElement = el;
                       const thresh = img._threshold || 128;
                       const ink = img._inkColor || '#000000';
-                      const filteredCanvas = applyMonochromeFilter(el, thresh, ink);
+                      const filteredCanvas = applyMonochromeFilter(
+                        el,
+                        thresh,
+                        ink,
+                        img._halftoneDotSize || 0,
+                        img._halftoneShape || 'dot'
+                      );
                       img.setElement(filteredCanvas);
                       resolve();
                     };
@@ -1100,7 +1368,13 @@ export default function App() {
                     obj._originalImgElement = el;
                     const thresh = obj._threshold || 128;
                     const ink = obj._inkColor || '#000000';
-                    const filteredCanvas = applyMonochromeFilter(el, thresh, ink);
+                    const filteredCanvas = applyMonochromeFilter(
+                      el,
+                      thresh,
+                      ink,
+                      obj._halftoneDotSize || 0,
+                      obj._halftoneShape || 'dot'
+                    );
                     obj.setElement(filteredCanvas);
                     resolve();
                   };
@@ -1191,7 +1465,6 @@ export default function App() {
       fabricCanvas.sendObjectBackwards(activeObject);
     } else if (action === 'sendToBack') {
       fabricCanvas.sendObjectToBack(activeObject);
-      // グリッド線がある場合はグリッドより前面に配置
       gridLinesRef.current.forEach((line) => fabricCanvas.sendObjectToBack(line));
     }
 
@@ -1263,7 +1536,6 @@ export default function App() {
     const fileName = prompt('保存するファイル名を入力してください:', defaultName);
     if (!fileName) return;
 
-    // 一時的にガイド線・グリッド線を非表示
     guideLinesRef.current.forEach((line) => fabricCanvas.remove(line));
     gridLinesRef.current.forEach((line) => fabricCanvas.remove(line));
 
@@ -1298,12 +1570,14 @@ export default function App() {
       return obj._customName;
     }
     if (obj._isMaskGroup) return '📦 マスクグループ';
+    if (obj._isGeneralGroup || obj.type === 'group') return '📁 レイヤーグループ';
     if (obj.type === 'i-text') {
       const txt = (obj as fabric.IText).text || '';
       return `🔤 ${txt.slice(0, 10)}${txt.length > 10 ? '...' : ''}`;
     }
     if (obj.type === 'rect') return '🔲 四角枠';
     if (obj.type === 'circle') return '⚪ 円枠';
+    if (obj.type === 'path') return '🎨 パス・素材パーツ';
     if (obj.type === 'image') return '🖼 画像';
     return 'パーツ';
   };
@@ -1428,9 +1702,80 @@ export default function App() {
           </div>
         </div>
 
+        {/* スタンプ・素材ライブラリ (追加機能) */}
+        <div style={{ backgroundColor: '#fffbebfb', padding: '10px', borderRadius: '8px', border: '1px solid #fef3c7' }}>
+          <label style={{ ...labelStyle, color: '#92400e', marginBottom: '6px' }}>🎨 スタンプ・素材ライブラリ</label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <span style={{ fontSize: '10px', color: '#78350f', fontWeight: 'bold' }}>切り抜き・装飾アルファベット文字</span>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px' }}>
+              {RETRO_TEXT_STYLES.map((st, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => addRetroTextStyle(st)}
+                  style={{ ...btnStyle, fontSize: '10px', backgroundColor: '#ffffff', borderColor: '#fde68a', cursor: 'pointer' }}
+                >
+                  ➕ {st.label}
+                </button>
+              ))}
+            </div>
+
+            <span style={{ fontSize: '10px', color: '#78350f', fontWeight: 'bold', marginTop: '4px' }}>レトロフレーム・飾り罫線</span>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px' }}>
+              {STAMP_PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => addStampPreset(p.id)}
+                  style={{ ...btnStyle, fontSize: '10px', backgroundColor: '#ffffff', borderColor: '#fde68a', cursor: 'pointer' }}
+                >
+                  ➕ {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
         {/* 編集プロパティ */}
         <div style={{ backgroundColor: '#f9fafb', padding: '10px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
           <label style={{ ...labelStyle, marginBottom: '6px' }}>4. 選択中パーツの編集</label>
+
+          {/* グループ化 / 解除ボタン (追加機能) */}
+          <div style={{ marginBottom: '10px', display: 'flex', gap: '6px' }}>
+            <button onClick={createGeneralGroup} style={{ ...btnStyle, flex: 1, fontSize: '11px', textAlign: 'center', backgroundColor: '#f3f4f6' }}>
+              📦 選択要素をグループ化
+            </button>
+            <button onClick={ungroupGeneralGroup} style={{ ...btnStyle, flex: 1, fontSize: '11px', textAlign: 'center', backgroundColor: '#f3f4f6' }}>
+              🔓 グループ解除
+            </button>
+          </div>
+
+          {/* 図形の自由変形 (Skew) (追加機能) */}
+          <div style={{ marginBottom: '10px', borderTop: '1px dashed #d1d5db', paddingTop: '6px' }}>
+            <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>自由変形 (歪み・斜体)</span>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <div style={{ flex: 1 }}>
+                <span style={{ fontSize: '10px', color: '#6b7280' }}>X方向歪み: {skewX}°</span>
+                <input
+                  type="range"
+                  min="-45"
+                  max="45"
+                  value={skewX}
+                  onChange={(e) => handleSkewChange('x', Number(e.target.value))}
+                  style={{ width: '100%' }}
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <span style={{ fontSize: '10px', color: '#6b7280' }}>Y方向歪み: {skewY}°</span>
+                <input
+                  type="range"
+                  min="-45"
+                  max="45"
+                  value={skewY}
+                  onChange={(e) => handleSkewChange('y', Number(e.target.value))}
+                  style={{ width: '100%' }}
+                />
+              </div>
+            </div>
+          </div>
 
           {/* グループ選択時の個別色指定パネル */}
           {hasMask ? (
@@ -1524,7 +1869,7 @@ export default function App() {
           )}
 
           {/* 四角枠・丸枠の塗りつぶし設定 */}
-          {(selectedObjectType === 'rect' || selectedObjectType === 'circle') && (
+          {(selectedObjectType === 'rect' || selectedObjectType === 'circle' || selectedObjectType === 'path') && (
             <div style={{ marginBottom: '8px', borderTop: '1px dashed #d1d5db', paddingTop: '6px' }}>
               <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>図形の中の塗りつぶし</span>
               <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
@@ -1620,7 +1965,6 @@ export default function App() {
             {/* テキスト専用コントロール */}
             {selectedObjectType === 'i-text' && (
               <div style={{ borderTop: '1px dashed #d1d5db', paddingTop: '6px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {/* 縦書き横書き */}
                 <div style={{ display: 'flex', gap: '4px' }}>
                   <button
                     onClick={() => toggleWritingMode('horizontal')}
@@ -1654,7 +1998,6 @@ export default function App() {
                   </button>
                 </div>
 
-                {/* 揃え位置 */}
                 <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
                   <span style={{ fontSize: '10px', color: '#6b7280' }}>揃え:</span>
                   {(['left', 'center', 'right'] as const).map((align) => (
@@ -1680,7 +2023,6 @@ export default function App() {
                   ))}
                 </div>
 
-                {/* 文字間隔・行間 */}
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <div style={{ flex: 1 }}>
                     <span style={{ fontSize: '10px', color: '#6b7280', display: 'block' }}>文字間隔</span>
@@ -1712,7 +2054,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 袋文字（縁取り） */}
                 <div style={{ borderTop: '1px dashed #e5e7eb', paddingTop: '4px' }}>
                   <span style={{ fontSize: '10px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>袋文字（縁取り）設定</span>
                   <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
@@ -1757,6 +2098,66 @@ export default function App() {
                   onChange={(e) => updateImageThreshold(Number(e.target.value))}
                   style={{ width: '100%' }}
                 />
+              </div>
+
+              {/* トーン・網点処理 (Halftone) パネル (追加機能) */}
+              <div style={{ backgroundColor: '#ffffff', padding: '8px', borderRadius: '6px', border: '1px solid #d1d5db' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer', marginBottom: '4px' }}>
+                  <input
+                    type="checkbox"
+                    checked={halftoneEnabled}
+                    onChange={(e) => updateHalftoneSettings(e.target.checked, halftoneDotSize, halftoneShape)}
+                  />
+                  🏁 トーン・網点処理 (Halftone)
+                </label>
+
+                {halftoneEnabled && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '4px' }}>
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                      <button
+                        onClick={() => updateHalftoneSettings(true, halftoneDotSize, 'dot')}
+                        style={{
+                          flex: 1,
+                          padding: '2px 4px',
+                          fontSize: '10px',
+                          borderRadius: '4px',
+                          border: '1px solid #d1d5db',
+                          backgroundColor: halftoneShape === 'dot' ? '#000' : '#fff',
+                          color: halftoneShape === 'dot' ? '#fff' : '#000',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        ● 丸ドット
+                      </button>
+                      <button
+                        onClick={() => updateHalftoneSettings(true, halftoneDotSize, 'line')}
+                        style={{
+                          flex: 1,
+                          padding: '2px 4px',
+                          fontSize: '10px',
+                          borderRadius: '4px',
+                          border: '1px solid #d1d5db',
+                          backgroundColor: halftoneShape === 'line' ? '#000' : '#fff',
+                          color: halftoneShape === 'line' ? '#fff' : '#000',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        〓 ライン
+                      </button>
+                    </div>
+                    <div>
+                      <span style={{ fontSize: '10px', color: '#6b7280' }}>ドットサイズ: {halftoneDotSize}px</span>
+                      <input
+                        type="range"
+                        min="2"
+                        max="20"
+                        value={halftoneDotSize}
+                        onChange={(e) => updateHalftoneSettings(true, Number(e.target.value), halftoneShape)}
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               {hasMask && !isEditingMaskMode && (
@@ -1839,6 +2240,8 @@ export default function App() {
               const isSelected = activeObject === obj;
               const isDragging = draggedIndex === index;
               const isTargeted = dragOverIndex === index;
+              const isGroup = obj.type === 'group' || obj._isGeneralGroup || obj._isMaskGroup;
+              const childObjects = isGroup && typeof obj.getObjects === 'function' ? obj.getObjects() : [];
 
               return (
                 <div
@@ -1896,7 +2299,7 @@ export default function App() {
                       </button>
                     </div>
 
-                    {/* レイヤー削除ボタン ＆ 順序変更ボタン (▲ 上へ / ▼ 下へ) */}
+                    {/* レイヤー削除ボタン ＆ 順序変更ボタン */}
                     <div style={{ display: 'flex', gap: '3px', alignItems: 'center' }}>
                       <button
                         onClick={(e) => {
@@ -1957,15 +2360,41 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* マスクグループの場合、ツリー展開して内部構成を表示 */}
-                  {obj._isMaskGroup && (
-                    <div style={{ paddingLeft: '16px', display: 'flex', flexDirection: 'column', gap: '2px', borderLeft: '2px solid #e5e7eb', marginLeft: '8px' }}>
-                      <div style={{ fontSize: '11px', color: '#6b7280', padding: '2px 4px', backgroundColor: '#f9fafb', borderRadius: '4px' }}>
-                        ├ 🖼 マスク対象の画像
-                      </div>
-                      <div style={{ fontSize: '11px', color: '#6b7280', padding: '2px 4px', backgroundColor: '#f9fafb', borderRadius: '4px' }}>
-                        └ 🔲 マスク外枠線
-                      </div>
+                  {/* グループ（マスク／汎用グループ）の場合、配下の構成要素を展開して個別選択可能にする (追加機能) */}
+                  {isGroup && childObjects.length > 0 && (
+                    <div style={{ paddingLeft: '16px', display: 'flex', flexDirection: 'column', gap: '2px', borderLeft: '2px dashed #cbd5e1', marginLeft: '8px' }}>
+                      {childObjects.map((childObj: any, cIdx: number) => {
+                        const isChildSelected = activeObject === childObj;
+                        return (
+                          <div
+                            key={cIdx}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (fabricCanvas) {
+                                fabricCanvas.setActiveObject(childObj);
+                                fabricCanvas.renderAll();
+                              }
+                            }}
+                            style={{
+                              fontSize: '11px',
+                              color: isChildSelected ? '#1d4ed8' : '#4b5563',
+                              padding: '3px 6px',
+                              backgroundColor: isChildSelected ? '#eff6ff' : '#f9fafb',
+                              borderRadius: '4px',
+                              border: isChildSelected ? '1px solid #93c5fd' : '1px solid #f3f4f6',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                            }}
+                          >
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              └ {getObjectLabel(childObj)}
+                            </span>
+                            <span style={{ fontSize: '9px', color: '#9ca3af' }}>個別選択</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
