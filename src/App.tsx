@@ -26,7 +26,7 @@ const INK_COLORS = [
   { name: 'グリーン', hex: '#009944', rgb: [0, 153, 68] },
 ];
 
-const FONTS = [
+const DEFAULT_FONTS = [
   { name: 'ゴシック体', family: 'sans-serif' },
   { name: '明朝体', family: 'serif' },
   { name: '等幅（レトロ風）', family: 'monospace' },
@@ -44,6 +44,9 @@ export default function App() {
   const [strokeWidthInput, setStrokeWidthInput] = useState<string>('4');
   const [fontSizeInput, setFontSizeInput] = useState<string>('32');
   const [fontFamily, setFontFamily] = useState<string>('sans-serif');
+  const [fontList, setFontList] = useState<Array<{ name: string; family: string }>>(DEFAULT_FONTS);
+  const [isLoadingFonts, setIsLoadingFonts] = useState<boolean>(false);
+
   const [threshold, setThreshold] = useState<number>(128);
   const [activeInkColor, setActiveInkColor] = useState<string>('#000000');
   const [selectedObjectType, setSelectedObjectType] = useState<string | null>(null);
@@ -68,6 +71,38 @@ export default function App() {
     imgObj: fabric.Image;
     frameObj: fabric.Object;
   } | null>(null);
+
+  // 端末（ローカル）のフォントを取得する関数
+  const loadLocalFonts = async () => {
+    if ('queryLocalFonts' in window) {
+      try {
+        setIsLoadingFonts(true);
+        // @ts-ignore
+        const availableFonts = await window.queryLocalFonts();
+        const fontMap = new Map<string, string>();
+
+        // 重複を除外して取得
+        availableFonts.forEach((font: any) => {
+          if (!fontMap.has(font.family)) {
+            fontMap.set(font.family, font.family);
+          }
+        });
+
+        const localFonts = Array.from(fontMap.keys())
+          .sort()
+          .map((fam) => ({ name: fam, family: fam }));
+
+        setFontList([...DEFAULT_FONTS, ...localFonts]);
+      } catch (err) {
+        console.warn('ローカルフォント取得が拒否されたか失敗しました:', err);
+        alert('フォントの取得許可が得られなかったか、サポートされていないブラウザです。');
+      } finally {
+        setIsLoadingFonts(false);
+      }
+    } else {
+      alert('お使いのブラウザ（または環境）はローカルフォント取得機能（Local Fonts API）に対応していません。Chrome / Edge などでお試しください。');
+    }
+  };
 
   // レイヤー一覧の同期
   const refreshObjectsList = (canvas: fabric.Canvas) => {
@@ -944,7 +979,7 @@ export default function App() {
         <div style={{ backgroundColor: '#f9fafb', padding: '10px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
           <label style={{ ...labelStyle, marginBottom: '6px' }}>4. 選択中パーツの編集</label>
 
-          {/* テキスト・画像・枠線のインクカラー切り替え */}
+          {/* インクカラー */}
           <div style={{ marginBottom: '10px' }}>
             <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>プリント（文字・画像）の色</span>
             <div style={{ display: 'flex', gap: '8px' }}>
@@ -981,15 +1016,25 @@ export default function App() {
             </div>
           </div>
 
+          {/* フォント設定 */}
           <div style={{ marginBottom: '8px' }}>
-            <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>フォント・文字サイズ</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+              <span style={{ fontSize: '11px', color: '#6b7280' }}>フォント・文字サイズ</span>
+              <button
+                onClick={loadLocalFonts}
+                disabled={isLoadingFonts}
+                style={{ fontSize: '10px', color: '#2563eb', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
+              >
+                {isLoadingFonts ? '取得中...' : '🔤 端末のフォントを取得'}
+              </button>
+            </div>
             <select
               value={fontFamily}
               onChange={(e) => updateFontFamily(e.target.value)}
               style={{ width: '100%', padding: '4px', fontSize: '12px', borderRadius: '4px', border: '1px solid #d1d5db', marginBottom: '4px' }}
             >
-              {FONTS.map((f) => (
-                <option key={f.name} value={f.family}>{f.name}</option>
+              {fontList.map((f, idx) => (
+                <option key={`${f.family}_${idx}`} value={f.family}>{f.name}</option>
               ))}
             </select>
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
