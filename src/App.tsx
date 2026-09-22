@@ -718,7 +718,6 @@ export default function App() {
   const createGroupFromObjects = (obj1: fabric.Object, obj2: fabric.Object) => {
     if (!fabricCanvas) return;
 
-    // 画像と枠（矩形・円形）の組み合わせの場合はマスクグループとして生成する
     const imgObj = [obj1, obj2].find((o) => o.type === 'image') as fabric.Image | undefined;
     const shapeObj = [obj1, obj2].find((o) => o.type === 'rect' || o.type === 'circle') as fabric.Object | undefined;
 
@@ -1692,7 +1691,6 @@ export default function App() {
   const deleteSelected = (targetObj?: fabric.Object) => {
     if (!fabricCanvas) return;
     if (targetObj) {
-      // グループ内の子要素を個別削除する場合のハンドリング
       const parentGroup = fabricCanvas.getObjects().find((o: any) => o.type === 'group' && o.getObjects && o.getObjects().includes(targetObj)) as fabric.Group;
       if (parentGroup) {
         parentGroup.remove(targetObj);
@@ -2531,26 +2529,18 @@ export default function App() {
                             padding: '4px 6px',
                             borderRadius: '4px',
                             backgroundColor: activeObject === child ? '#e0e7ff' : '#f8fafc',
-                            border: '1px solid #cbd5e1',
-                            fontSize: '11px',
+                            border: '1px solid #e2e8f0',
                             cursor: 'pointer',
+                            fontSize: '11px',
                           }}
                         >
-                          <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', flex: 1 }}>
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#475569' }}>
                             {getObjectLabel(child)}
                           </span>
-
                           <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
                             <button
-                              onClick={(e) => renameLayer(child, e)}
-                              style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '1px', fontSize: '11px' }}
-                              title="名前変更"
-                            >
-                              ✏️
-                            </button>
-                            <button
                               onClick={(e) => toggleVisibility(child, e)}
-                              style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '1px', fontSize: '11px' }}
+                              style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '1px', fontSize: '10px' }}
                               title={child.visible ? '非表示にする' : '表示する'}
                             >
                               {child.visible !== false ? '👁️' : '🙈'}
@@ -2560,7 +2550,7 @@ export default function App() {
                                 e.stopPropagation();
                                 deleteSelected(child);
                               }}
-                              style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '1px', fontSize: '11px', color: '#ef4444' }}
+                              style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '1px', fontSize: '10px', color: '#ef4444' }}
                               title="削除"
                             >
                               🗑️
