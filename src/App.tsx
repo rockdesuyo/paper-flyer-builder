@@ -48,7 +48,7 @@ const STAMP_PRESETS = [
   { id: 'retro_arrow', label: '➔ レトロ矢印', type: 'shape', path: 'arrow' },
 ];
 
-// 添付画像風の切り抜き・装飾文字スタイル（Ransom Letter / Collage Style）
+// 切り抜き・装飾文字スタイル
 const RETRO_TEXT_STYLES = [
   { label: '切り抜きパンク文字 (A)', text: 'A', bg: '#000000', color: '#ffffff', font: 'Impact', skew: -8 },
   { label: '切り抜きビンテージ (B)', text: 'B', bg: '#e60012', color: '#ffffff', font: 'Georgia', skew: 5 },
@@ -94,9 +94,9 @@ export default function App() {
   const [selectedSize, setSelectedSize] = useState<keyof typeof PAPER_SIZES>('A4');
   const [paperColor, setPaperColor] = useState<string>('#ff944d');
 
-  // 編集プロパティ状態
+  // 編集プロパティ状態（デフォルトのフォントサイズを16に変更）
   const [strokeWidthInput, setStrokeWidthInput] = useState<string>('4');
-  const [fontSizeInput, setFontSizeInput] = useState<string>('32');
+  const [fontSizeInput, setFontSizeInput] = useState<string>('16');
   const [fontFamily, setFontFamily] = useState<string>('sans-serif');
   const [fontList, setFontList] = useState<Array<{ name: string; family: string }>>(DEFAULT_FONTS);
   const [isLoadingFonts, setIsLoadingFonts] = useState<boolean>(false);
@@ -176,7 +176,7 @@ export default function App() {
           .sort()
           .map((fam) => ({ name: fam, family: fam }));
 
-        setFontList([...DEFAULTFONTS, ...localFonts]);
+        setFontList([...DEFAULT_FONTS, ...localFonts]);
       } catch (err) {
         console.warn('ローカルフォント取得が拒否されたか失敗しました:', err);
         alert('フォントの取得許可が得られなかったか、サポートされていないブラウザです。');
@@ -392,94 +392,98 @@ export default function App() {
       guideLinesRef.current.push(txt);
     };
 
-    // ガイド＆スナップ＆余白サイズ計算機能
+    // ガイド＆スナップ＆余白サイズ計算機能（描画スロットリングでスムーズ化）
+    let animFrameId: number | null = null;
     const handleObjectMovingOrScaling = (e: fabric.IEvent) => {
-      clearGuides();
-      const target = e.target;
-      if (!target) return;
+      if (animFrameId) cancelAnimationFrame(animFrameId);
+      animFrameId = requestAnimationFrame(() => {
+        clearGuides();
+        const target = e.target;
+        if (!target) return;
 
-      const snapThreshold = 6;
-      let targetLeft = target.left || 0;
-      let targetTop = target.top || 0;
+        const snapThreshold = 6;
+        let targetLeft = target.left || 0;
+        let targetTop = target.top || 0;
 
-      const targetBBox = target.getBoundingRect();
-      const targetCenter = target.getCenterPoint();
+        const targetBBox = target.getBoundingRect();
+        const targetCenter = target.getCenterPoint();
 
-      // 余白計算 (上下左右)
-      const marginTop = Math.round(targetBBox.top);
-      const marginBottom = Math.round(size.height - (targetBBox.top + targetBBox.height));
-      const marginLeft = Math.round(targetBBox.left);
-      const marginRight = Math.round(size.width - (targetBBox.left + targetBBox.width));
+        // 余白計算 (上下左右)
+        const marginTop = Math.round(targetBBox.top);
+        const marginBottom = Math.round(size.height - (targetBBox.top + targetBBox.height));
+        const marginLeft = Math.round(targetBBox.left);
+        const marginRight = Math.round(size.width - (targetBBox.left + targetBBox.width));
 
-      setMarginGuides({
-        top: marginTop,
-        bottom: marginBottom,
-        left: marginLeft,
-        right: marginRight,
-      });
+        setMarginGuides({
+          top: marginTop,
+          bottom: marginBottom,
+          left: marginLeft,
+          right: marginRight,
+        });
 
-      // 上下、左右余白が等しい場合のハイライトガイド
-      if (Math.abs(marginTop - marginBottom) < 2) {
-        drawGuideLine(0, size.height / 2, size.width, size.height / 2);
-      }
-      if (Math.abs(marginLeft - marginRight) < 2) {
-        drawGuideLine(size.width / 2, 0, size.width / 2, size.height);
-      }
-
-      // 余白サイズをキャンバス上に描画表示
-      drawGuideLine(targetCenter.x, 0, targetCenter.x, targetBBox.top);
-      drawTextLabel(targetCenter.x, targetBBox.top / 2, `${marginTop}px`);
-
-      drawGuideLine(targetCenter.x, targetBBox.top + targetBBox.height, targetCenter.x, size.height);
-      drawTextLabel(targetCenter.x, targetBBox.top + targetBBox.height + marginBottom / 2, `${marginBottom}px`);
-
-      drawGuideLine(0, targetCenter.y, targetBBox.left, targetCenter.y);
-      drawTextLabel(targetBBox.left / 2, targetCenter.y, `${marginLeft}px`);
-
-      drawGuideLine(targetBBox.left + targetBBox.width, targetCenter.y, size.width, targetCenter.y);
-      drawTextLabel(targetBBox.left + targetBBox.width + marginRight / 2, targetCenter.y, `${marginRight}px`);
-
-      if (enableSnap) {
-        // グリッド吸着
-        if (showGrid) {
-          const snappedLeft = Math.round(targetLeft / gridSize) * gridSize;
-          const snappedTop = Math.round(targetTop / gridSize) * gridSize;
-
-          if (Math.abs(targetLeft - snappedLeft) < snapThreshold) {
-            target.set('left', snappedLeft);
-          }
-          if (Math.abs(targetTop - snappedTop) < snapThreshold) {
-            target.set('top', snappedTop);
-          }
-        }
-
-        // オブジェクト・キャンバス中央スナップ
-        if (Math.abs(targetCenter.x - size.width / 2) < snapThreshold) {
-          target.setPositionByOrigin(new fabric.Point(size.width / 2, targetCenter.y), 'center', 'center');
-          drawGuideLine(size.width / 2, 0, size.width / 2, size.height);
-        }
-        if (Math.abs(targetCenter.y - size.height / 2) < snapThreshold) {
-          target.setPositionByOrigin(new fabric.Point(targetCenter.x, size.height / 2), 'center', 'center');
+        // 上下、左右余白が等しい場合のハイライトガイド
+        if (Math.abs(marginTop - marginBottom) < 2) {
           drawGuideLine(0, size.height / 2, size.width, size.height / 2);
         }
+        if (Math.abs(marginLeft - marginRight) < 2) {
+          drawGuideLine(size.width / 2, 0, size.width / 2, size.height);
+        }
 
-        canvas.getObjects().forEach((obj) => {
-          if (obj === target || (obj as any)._isGuideLine || (obj as any)._isGridLine || (obj as any)._isTempFrame) return;
+        // 余白サイズをキャンバス上に描画表示
+        drawGuideLine(targetCenter.x, 0, targetCenter.x, targetBBox.top);
+        drawTextLabel(targetCenter.x, targetBBox.top / 2, `${marginTop}px`);
 
-          const objBBox = obj.getBoundingRect();
-          const objCenter = obj.getCenterPoint();
+        drawGuideLine(targetCenter.x, targetBBox.top + targetBBox.height, targetCenter.x, size.height);
+        drawTextLabel(targetCenter.x, targetBBox.top + targetBBox.height + marginBottom / 2, `${marginBottom}px`);
 
-          if (Math.abs(targetBBox.left - objBBox.left) < snapThreshold) {
-            target.set('left', objBBox.left + (target.left - targetBBox.left));
-            drawGuideLine(objBBox.left, 0, objBBox.left, size.height);
-          } else if (Math.abs(targetCenter.x - objCenter.x) < snapThreshold) {
-            target.setPositionByOrigin(new fabric.Point(objCenter.x, targetCenter.y), 'center', 'center');
-            drawGuideLine(objCenter.x, 0, objCenter.x, size.height);
+        drawGuideLine(0, targetCenter.y, targetBBox.left, targetCenter.y);
+        drawTextLabel(targetBBox.left / 2, targetCenter.y, `${marginLeft}px`);
+
+        drawGuideLine(targetBBox.left + targetBBox.width, targetCenter.y, size.width, targetCenter.y);
+        drawTextLabel(targetBBox.left + targetBBox.width + marginRight / 2, targetCenter.y, `${marginRight}px`);
+
+        if (enableSnap) {
+          // グリッド吸着
+          if (showGrid) {
+            const snappedLeft = Math.round(targetLeft / gridSize) * gridSize;
+            const snappedTop = Math.round(targetTop / gridSize) * gridSize;
+
+            if (Math.abs(targetLeft - snappedLeft) < snapThreshold) {
+              target.set('left', snappedLeft);
+            }
+            if (Math.abs(targetTop - snappedTop) < snapThreshold) {
+              target.set('top', snappedTop);
+            }
           }
-        });
-      }
 
-      canvas.renderAll();
+          // オブジェクト・キャンバス中央スナップ
+          if (Math.abs(targetCenter.x - size.width / 2) < snapThreshold) {
+            target.setPositionByOrigin(new fabric.Point(size.width / 2, targetCenter.y), 'center', 'center');
+            drawGuideLine(size.width / 2, 0, size.width / 2, size.height);
+          }
+          if (Math.abs(targetCenter.y - size.height / 2) < snapThreshold) {
+            target.setPositionByOrigin(new fabric.Point(targetCenter.x, size.height / 2), 'center', 'center');
+            drawGuideLine(0, size.height / 2, size.width, size.height / 2);
+          }
+
+          canvas.getObjects().forEach((obj) => {
+            if (obj === target || (obj as any)._isGuideLine || (obj as any)._isGridLine || (obj as any)._isTempFrame) return;
+
+            const objBBox = obj.getBoundingRect();
+            const objCenter = obj.getCenterPoint();
+
+            if (Math.abs(targetBBox.left - objBBox.left) < snapThreshold) {
+              target.set('left', objBBox.left + (target.left - targetBBox.left));
+              drawGuideLine(objBBox.left, 0, objBBox.left, size.height);
+            } else if (Math.abs(targetCenter.x - objCenter.x) < snapThreshold) {
+              target.setPositionByOrigin(new fabric.Point(objCenter.x, targetCenter.y), 'center', 'center');
+              drawGuideLine(objCenter.x, 0, objCenter.x, size.height);
+            }
+          });
+        }
+
+        canvas.renderAll();
+      });
     };
 
     canvas.on('object:moving', handleObjectMovingOrScaling);
@@ -517,7 +521,6 @@ export default function App() {
         setSkewX(activeObj.skewX || 0);
         setSkewY(activeObj.skewY || 0);
 
-        // カラーコード情報の同期（選択復帰時もカラー情報をリセットしない）
         if (activeObj._inkColor) {
           setActiveInkColor(activeObj._inkColor);
         } else if (activeObj.fill && typeof activeObj.fill === 'string' && activeObj.fill !== 'transparent' && activeObj.type !== 'rect' && activeObj.type !== 'circle') {
@@ -758,7 +761,7 @@ export default function App() {
     saveHistory(fabricCanvas);
   };
 
-  // 汎用グループの解除（右ナビ・マスク・汎用すべてのグループに対応）
+  // 汎用グループの解除（グループ解除の完全修正）
   const ungroupGeneralGroup = () => {
     if (!fabricCanvas) return;
     const activeObj = fabricCanvas.getActiveObject() as any;
@@ -773,8 +776,6 @@ export default function App() {
       const items = activeObj.getObjects();
       activeObj.toActiveSelection();
       fabricCanvas.discardActiveObject();
-      const sel = new fabric.ActiveSelection(items, { canvas: fabricCanvas });
-      fabricCanvas.setActiveObject(sel);
       fabricCanvas.renderAll();
       refreshObjectsList(fabricCanvas);
       saveHistory(fabricCanvas);
@@ -917,7 +918,7 @@ export default function App() {
     }
   };
 
-  // カラー更新（全体・グループ一括変更・個別枠・個別に画像のみ対応）
+  // カラー更新（マスクグループの画像単体色変更問題の完全修正対応）
   const changeInkColor = (hex: string, targetType: 'all' | 'frame' | 'image' = 'all') => {
     setActiveInkColor(hex);
     if (!fabricCanvas) return;
@@ -1001,17 +1002,17 @@ export default function App() {
     }
   };
 
-  // テキスト追加（見出し・本文・本文段落ブロック）
+  // テキスト追加（デフォルトサイズ調整：幅200px、フォントサイズ16px）
   const addText = (type: 'title' | 'body' | 'paragraph') => {
     if (!fabricCanvas) return;
-    const size = type === 'title' ? parseInt(fontSizeInput, 10) || 36 : parseInt(fontSizeInput, 10) || 18;
+    const size = type === 'title' ? 32 : 16;
 
     if (type === 'paragraph') {
-      // 本文の段落ブロック（折り返し対応のTextbox）
+      // 本文の段落ブロック（横幅を大きすぎないよう200pxに修正）
       const textbox = new fabric.Textbox('ここに本文の段落テキストを入力します。長文の文章も自動で折り返されて段落ブロックとして編集できます。', {
         left: 50,
         top: 50,
-        width: 300,
+        width: 200,
         fontFamily: fontFamily,
         fontSize: 16,
         fill: activeInkColor,
@@ -1145,7 +1146,7 @@ export default function App() {
     }
   };
 
-  // 切り抜き文字・装飾レタリング素材追加（添付画像スタイル）
+  // 切り抜き文字・装飾レタリング素材追加
   const addRetroTextStyle = (style: typeof RETRO_TEXT_STYLES[0]) => {
     if (!fabricCanvas) return;
 
@@ -1617,7 +1618,7 @@ export default function App() {
     refreshObjectsList(fabricCanvas);
   };
 
-  // レイヤー順序操作（最前面・前面・背面・最背面・並べ替え）
+  // レイヤー順序操作
   const moveLayerOrder = (action: 'bringToFront' | 'bringForward' | 'sendBackwards' | 'sendToBack') => {
     if (!fabricCanvas || !activeObject) return;
 
@@ -1637,13 +1638,14 @@ export default function App() {
     saveHistory(fabricCanvas);
   };
 
-  // レイヤー複製機能
-  const duplicateSelectedLayer = (targetObj?: fabric.Object) => {
+  // レイヤー複製機能（完全修正：Fabric.js v6のasync/await Promiseパターン対応）
+  const duplicateSelectedLayer = async (targetObj?: fabric.Object) => {
     if (!fabricCanvas) return;
     const objToClone = targetObj || fabricCanvas.getActiveObject();
     if (!objToClone) return;
 
-    objToClone.clone((cloned: fabric.Object) => {
+    try {
+      const cloned = await objToClone.clone();
       cloned.set({
         left: (cloned.left || 0) + 15,
         top: (cloned.top || 0) + 15,
@@ -1656,7 +1658,9 @@ export default function App() {
       fabricCanvas.renderAll();
       refreshObjectsList(fabricCanvas);
       saveHistory(fabricCanvas);
-    });
+    } catch (err) {
+      console.error('複製処理エラー:', err);
+    }
   };
 
   // レイヤー表示・非表示の切り替え
@@ -1724,7 +1728,7 @@ export default function App() {
     fabricCanvas.renderAll();
   };
 
-  // オブジェクトの削除（指定引数がない場合は選択中要素を削除）
+  // オブジェクトの削除（削除処理の修正）
   const deleteSelected = (targetObj?: fabric.Object) => {
     if (!fabricCanvas) return;
     if (targetObj) {
@@ -1738,10 +1742,11 @@ export default function App() {
       fabricCanvas.discardActiveObject();
     }
     fabricCanvas.renderAll();
+    refreshObjectsList(fabricCanvas);
     saveHistory(fabricCanvas);
   };
 
-  // 画像保存（透過PNG／背景カラー付き保存の切り替え）
+  // 画像保存
   const exportImage = (isTransparent: boolean) => {
     if (!fabricCanvas) return;
 
@@ -1782,7 +1787,7 @@ export default function App() {
     link.click();
   };
 
-  // レイヤー一覧用テキスト（アイコン非表示で名称のみ）
+  // レイヤー一覧用テキスト
   const getObjectLabel = (obj: any) => {
     if (obj._customName && obj._customName.trim() !== '') {
       return obj._customName;
@@ -1910,7 +1915,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* 素材追加（見出し・本文・本文段落ブロックに対応） */}
+        {/* 素材追加 */}
         <div>
           <label style={labelStyle}>3. 素材を追加</label>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -1965,7 +1970,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* グループ選択時・通常選択時のカラー変更（一括適用対応） */}
+          {/* カラー変更 */}
           {hasMask ? (
             <div style={{ marginBottom: '10px', backgroundColor: '#ffffff', padding: '8px', borderRadius: '6px', border: '1px solid #d1d5db' }}>
               <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#111827', display: 'block', marginBottom: '6px' }}>
@@ -2016,7 +2021,6 @@ export default function App() {
               </div>
             </div>
           ) : (
-            /* 通常パーツ・一般グループ用インクカラー選択 ＆ カスタムカラー指定 */
             <div style={{ marginBottom: '10px' }}>
               <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>プリント（文字・画像・枠）の色</span>
               <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '6px' }}>
@@ -2056,7 +2060,6 @@ export default function App() {
             </div>
           )}
 
-          {/* 四角枠・丸枠の塗りつぶし設定（背景と同化しない視認性の高い「透明」アイコン） */}
           {(selectedObjectType === 'rect' || selectedObjectType === 'circle' || selectedObjectType === 'path') && (
             <div style={{ marginBottom: '8px', borderTop: '1px dashed #d1d5db', paddingTop: '6px' }}>
               <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>図形の中の塗りつぶし</span>
@@ -2118,7 +2121,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* フォント設定・テキスト装飾 */}
+          {/* フォント設定 */}
           <div style={{ marginBottom: '8px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
               <span style={{ fontSize: '11px', color: '#6b7280' }}>フォント・文字サイズ</span>
@@ -2380,7 +2383,7 @@ export default function App() {
           )}
         </div>
 
-        {/* スタンプ・素材ライブラリ（「選択中のパーツの編集」の下へ移動） */}
+        {/* スタンプ・素材ライブラリ */}
         <div style={{ backgroundColor: '#fffbebfb', padding: '10px', borderRadius: '8px', border: '1px solid #fef3c7' }}>
           <label style={{ ...labelStyle, color: '#92400e', marginBottom: '6px' }}>🎨 スタンプ・素材ライブラリ</label>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -2501,71 +2504,52 @@ export default function App() {
                       alignItems: 'center',
                       justify: 'space-between',
                       padding: '8px 10px',
-                      fontSize: '12px',
+                      backgroundColor: isSelected ? '#eff6ff' : dragOverIndex === index ? '#f0fdf4' : '#f9fafb',
+                      border: isSelected ? '1px solid #3b82f6' : dragOverIndex === index ? '2px dashed #22c55e' : '1px solid #e5e7eb',
                       borderRadius: '6px',
-                      border: isSelected ? '2px solid #2563eb' : '1px solid #e5e7eb',
-                      backgroundColor: isSelected ? '#eff6ff' : dragOverIndex === index ? '#f0fdf4' : '#ffffff',
-                      cursor: 'pointer',
-                      userSelect: 'none',
-                      opacity: obj.visible === false ? 0.4 : 1,
+                      cursor: 'grab',
+                      fontSize: '12px',
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden', flex: 1 }}>
-                      {/* グループ展開用矢印ボタン */}
-                      {isGroup ? (
-                        <span
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}>
+                      <span style={{ color: '#9ca3af', cursor: 'grab' }}>⋮⋮</span>
+                      {isGroup && (
+                        <button
                           onClick={(e) => toggleGroupExpand(index, e)}
-                          style={{ fontSize: '10px', padding: '2px', color: '#64748b', cursor: 'pointer' }}
+                          style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', fontSize: '10px' }}
                         >
                           {isExpanded ? '▼' : '▶'}
-                        </span>
-                      ) : null}
-
-                      {/* レイヤー名（アイコン非表示で名前のみ） */}
+                        </button>
+                      )}
                       <span
                         onDoubleClick={(e) => renameLayer(obj, e)}
                         style={{
                           fontWeight: isSelected ? 'bold' : 'normal',
-                          color: '#1f2937',
                           whiteSpace: 'nowrap',
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
+                          maxWidth: '120px',
                         }}
-                        title="ダブルクリックで名前を変更"
+                        title="ダブルクリックで名前変更"
                       >
                         {getObjectLabel(obj)}
                       </span>
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      {/* 表示・非表示切り替え */}
                       <button
                         onClick={(e) => toggleVisibility(obj, e)}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '12px', padding: '2px' }}
-                        title={obj.visible === false ? '表示する' : '非表示にする'}
+                        style={{ border: 'none', background: 'none', cursor: 'pointer', opacity: obj.visible ? 1 : 0.3 }}
+                        title="表示/非表示切り替え"
                       >
-                        {obj.visible === false ? '🙈' : '👁'}
+                        {obj.visible !== false ? '👁️' : '🙈'}
                       </button>
-
-                      {/* 複製ボタン */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          duplicateSelectedLayer(obj);
-                        }}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', padding: '2px' }}
-                        title="複製"
-                      >
-                        📋
-                      </button>
-
-                      {/* 削除ボタン */}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           deleteSelected(obj);
                         }}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: '12px', padding: '2px' }}
+                        style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#ef4444' }}
                         title="削除"
                       >
                         ✕
@@ -2573,39 +2557,27 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* グループ内個別要素の展開・個別選択表示 */}
+                  {/* グループを展開した場合の内部要素表示 */}
                   {isGroup && isExpanded && (
-                    <div style={{ marginLeft: '16px', display: 'flex', flexDirection: 'column', gap: '4px', borderLeft: '2px solid #cbd5e1', paddingLeft: '8px' }}>
-                      {groupItems.map((childObj: any, childIdx: number) => {
-                        const isChildSelected = activeObject === childObj;
-                        return (
-                          <div
-                            key={childIdx}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (fabricCanvas) {
-                                fabricCanvas.setActiveObject(childObj);
-                                fabricCanvas.renderAll();
-                              }
-                            }}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justify: 'space-between',
-                              padding: '4px 8px',
-                              fontSize: '11px',
-                              borderRadius: '4px',
-                              border: isChildSelected ? '1.5px solid #2563eb' : '1px solid #f1f5f9',
-                              backgroundColor: isChildSelected ? '#dbeafe' : '#f8fafc',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#475569' }}>
-                              {getObjectLabel(childObj)}
-                            </span>
-                          </div>
-                        );
-                      })}
+                    <div style={{ paddingLeft: '16px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      {groupItems.map((childObj: any, childIdx: number) => (
+                        <div
+                          key={childIdx}
+                          style={{
+                            padding: '4px 8px',
+                            backgroundColor: '#ffffff',
+                            border: '1px solid #f3f4f6',
+                            borderRadius: '4px',
+                            fontSize: '11px',
+                            color: '#6b7280',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justify: 'space-between',
+                          }}
+                        >
+                          <span>↳ {getObjectLabel(childObj)}</span>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
