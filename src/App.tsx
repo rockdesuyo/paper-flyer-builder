@@ -135,6 +135,10 @@ export default function App() {
   // レイヤー管理
   const [objectsList, setObjectsList] = useState<fabric.Object[]>([]);
   const [activeObject, setActiveObject] = useState<fabric.Object | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState<Record<number, boolean>>({});
+
+  // 余白サイズガイド表示用
+  const [marginGuides, setMarginGuides] = useState<{ top: number; bottom: number; left: number; right: number } | null>(null);
 
   // 履歴（Undo）管理
   const historyRef = useRef<string[]>([]);
@@ -145,7 +149,7 @@ export default function App() {
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
-  const guideLinesRef = useRef<fabric.Line[]>([]);
+  const guideLinesRef = useRef<fabric.Object[]>([]);
   const gridLinesRef = useRef<fabric.Line[]>([]);
   const maskEditingCtxRef = useRef<{
     group: fabric.Group;
@@ -172,7 +176,7 @@ export default function App() {
           .sort()
           .map((fam) => ({ name: fam, family: fam }));
 
-        setFontList([...DEFAULT_FONTS, ...localFonts]);
+        setFontList([...DEFAULTFONTS, ...localFonts]);
       } catch (err) {
         console.warn('ローカルフォント取得が拒否されたか失敗しました:', err);
         alert('フォントの取得許可が得られなかったか、サポートされていないブラウザです。');
@@ -208,6 +212,7 @@ export default function App() {
         '_halftoneShape',
         '_isGuideLine',
         '_isGridLine',
+        'visible',
       ])
     );
 
@@ -351,8 +356,9 @@ export default function App() {
     historyRef.current = [];
 
     const clearGuides = () => {
-      guideLinesRef.current.forEach((line) => canvas.remove(line));
+      guideLinesRef.current.forEach((obj) => canvas.remove(obj));
       guideLinesRef.current = [];
+      setMarginGuides(null);
     };
 
     const drawGuideLine = (x1: number, y1: number, x2: number, y2: number) => {
@@ -368,8 +374,26 @@ export default function App() {
       guideLinesRef.current.push(line);
     };
 
-    // ガイド＆スナップ機能
-    canvas.on('object:moving', (e) => {
+    const drawTextLabel = (x: number, y: number, textStr: string) => {
+      const txt = new fabric.Text(textStr, {
+        left: x,
+        top: y,
+        fontSize: 10,
+        fill: '#ffffff',
+        backgroundColor: 'rgba(239, 68, 68, 0.85)',
+        selectable: false,
+        evented: false,
+        originX: 'center',
+        originY: 'center',
+        padding: 2,
+      });
+      (txt as any)._isGuideLine = true;
+      canvas.add(txt);
+      guideLinesRef.current.push(txt);
+    };
+
+    // ガイド＆スナップ＆余白サイズ計算機能
+    const handleObjectMovingOrScaling = (e: fabric.IEvent) => {
       clearGuides();
       const target = e.target;
       if (!target) return;
@@ -377,6 +401,43 @@ export default function App() {
       const snapThreshold = 6;
       let targetLeft = target.left || 0;
       let targetTop = target.top || 0;
+
+      const targetBBox = target.getBoundingRect();
+      const targetCenter = target.getCenterPoint();
+
+      // 余白計算 (上下左右)
+      const marginTop = Math.round(targetBBox.top);
+      const marginBottom = Math.round(size.height - (targetBBox.top + targetBBox.height));
+      const marginLeft = Math.round(targetBBox.left);
+      const marginRight = Math.round(size.width - (targetBBox.left + targetBBox.width));
+
+      setMarginGuides({
+        top: marginTop,
+        bottom: marginBottom,
+        left: marginLeft,
+        right: marginRight,
+      });
+
+      // 上下、左右余白が等しい場合のハイライトガイド
+      if (Math.abs(marginTop - marginBottom) < 2) {
+        drawGuideLine(0, size.height / 2, size.width, size.height / 2);
+      }
+      if (Math.abs(marginLeft - marginRight) < 2) {
+        drawGuideLine(size.width / 2, 0, size.width / 2, size.height);
+      }
+
+      // 余白サイズをキャンバス上に描画表示
+      drawGuideLine(targetCenter.x, 0, targetCenter.x, targetBBox.top);
+      drawTextLabel(targetCenter.x, targetBBox.top / 2, `${marginTop}px`);
+
+      drawGuideLine(targetCenter.x, targetBBox.top + targetBBox.height, targetCenter.x, size.height);
+      drawTextLabel(targetCenter.x, targetBBox.top + targetBBox.height + marginBottom / 2, `${marginBottom}px`);
+
+      drawGuideLine(0, targetCenter.y, targetBBox.left, targetCenter.y);
+      drawTextLabel(targetBBox.left / 2, targetCenter.y, `${marginLeft}px`);
+
+      drawGuideLine(targetBBox.left + targetBBox.width, targetCenter.y, size.width, targetCenter.y);
+      drawTextLabel(targetBBox.left + targetBBox.width + marginRight / 2, targetCenter.y, `${marginRight}px`);
 
       if (enableSnap) {
         // グリッド吸着
@@ -393,9 +454,6 @@ export default function App() {
         }
 
         // オブジェクト・キャンバス中央スナップ
-        const targetBBox = target.getBoundingRect();
-        const targetCenter = target.getCenterPoint();
-
         if (Math.abs(targetCenter.x - size.width / 2) < snapThreshold) {
           target.setPositionByOrigin(new fabric.Point(size.width / 2, targetCenter.y), 'center', 'center');
           drawGuideLine(size.width / 2, 0, size.width / 2, size.height);
@@ -422,11 +480,23 @@ export default function App() {
       }
 
       canvas.renderAll();
-    });
+    };
+
+    canvas.on('object:moving', handleObjectMovingOrScaling);
+    canvas.on('object:scaling', handleObjectMovingOrScaling);
 
     canvas.on('object:modified', () => {
       clearGuides();
       saveHistory(canvas);
+    });
+
+    // 余白（背景）をクリックしたら選択を解除する
+    canvas.on('mouse:down', (e) => {
+      if (!e.target) {
+        canvas.discardActiveObject();
+        canvas.renderAll();
+        clearGuides();
+      }
     });
 
     // ダブルクリックでマスク編集モードへ
@@ -447,6 +517,15 @@ export default function App() {
         setSkewX(activeObj.skewX || 0);
         setSkewY(activeObj.skewY || 0);
 
+        // カラーコード情報の同期（選択復帰時もカラー情報をリセットしない）
+        if (activeObj._inkColor) {
+          setActiveInkColor(activeObj._inkColor);
+        } else if (activeObj.fill && typeof activeObj.fill === 'string' && activeObj.fill !== 'transparent' && activeObj.type !== 'rect' && activeObj.type !== 'circle') {
+          setActiveInkColor(activeObj.fill);
+        } else if (activeObj.stroke && typeof activeObj.stroke === 'string') {
+          setActiveInkColor(activeObj.stroke);
+        }
+
         if (activeObj._isMaskGroup) {
           const groupObjs = activeObj.getObjects ? activeObj.getObjects() : [];
           const targetImg = groupObjs.find((o: any) => o.type === 'image') || activeObj._maskedImage;
@@ -455,6 +534,7 @@ export default function App() {
             setHalftoneEnabled(!!(targetImg._halftoneDotSize && targetImg._halftoneDotSize > 1));
             setHalftoneDotSize(targetImg._halftoneDotSize || 6);
             setHalftoneShape(targetImg._halftoneShape || 'dot');
+            if (targetImg._inkColor) setActiveInkColor(targetImg._inkColor);
           }
         } else if (activeObj.type === 'image') {
           setThreshold(activeObj._threshold !== undefined ? activeObj._threshold : 128);
@@ -474,7 +554,7 @@ export default function App() {
         }
 
         // テキストプロパティ同期
-        if (activeObj.type === 'i-text') {
+        if (activeObj.type === 'i-text' || activeObj.type === 'textbox') {
           const txtObj = activeObj as fabric.IText;
           setCharSpacing(txtObj.charSpacing || 0);
           setLineHeight(txtObj.lineHeight || 1.16);
@@ -487,14 +567,6 @@ export default function App() {
         // 図形塗りつぶし同期
         if (activeObj.type === 'rect' || activeObj.type === 'circle' || activeObj.type === 'path') {
           setShapeFillColor((activeObj.fill as string) || 'transparent');
-        }
-
-        if (activeObj.fill && typeof activeObj.fill === 'string' && activeObj.type !== 'rect' && activeObj.type !== 'circle') {
-          setActiveInkColor(activeObj.fill);
-        } else if (activeObj.stroke) {
-          setActiveInkColor(activeObj.stroke);
-        } else if (activeObj._inkColor) {
-          setActiveInkColor(activeObj._inkColor);
         }
       } else {
         setSelectedObjectType(null);
@@ -509,6 +581,7 @@ export default function App() {
       setActiveObject(null);
       setSelectedObjectType(null);
       setHasMask(false);
+      clearGuides();
       refreshObjectsList(canvas);
     });
 
@@ -530,7 +603,7 @@ export default function App() {
     };
   }, [selectedSize]);
 
-  // キーボード操作（Undo & 方向キー & Delete / Backspace による削除）
+  // キーボード操作（Shift+Enter改行、Undo & 方向キー & Delete / Backspace による削除）
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!fabricCanvas) return;
@@ -540,10 +613,21 @@ export default function App() {
         activeEl &&
         (activeEl.tagName === 'INPUT' ||
           activeEl.tagName === 'SELECT' ||
-          activeEl.tagName === 'TEXTAREA' ||
-          activeEl.isContentEditable)
+          activeEl.tagName === 'TEXTAREA')
       ) {
         return;
+      }
+
+      // Shift + Enter でテキストの改行を許可する処理
+      const activeObj = fabricCanvas.getActiveObject();
+      if (activeObj && (activeObj.type === 'i-text' || activeObj.type === 'textbox') && (activeObj as fabric.IText).isEditing) {
+        if (e.key === 'Enter' && e.shiftKey) {
+          e.stopPropagation();
+          return;
+        }
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+          return;
+        }
       }
 
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
@@ -554,16 +638,11 @@ export default function App() {
 
       // Delete または Backspace で選択要素の削除
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        const activeObj = fabricCanvas.getActiveObject();
-        if (activeObj && activeObj.type === 'i-text' && (activeObj as fabric.IText).isEditing) {
-          return;
-        }
         e.preventDefault();
         deleteSelected();
         return;
       }
 
-      const activeObj = fabricCanvas.getActiveObject();
       if (!activeObj) return;
 
       const step = e.shiftKey ? 10 : 1;
@@ -591,9 +670,9 @@ export default function App() {
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, true);
     return () => {
-      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keydown', handleKeyDown, true);
     };
   }, [fabricCanvas]);
 
@@ -657,6 +736,7 @@ export default function App() {
     (group as any)._maskedImage = imageObj;
     (group as any)._frameShape = outlineObj;
     (group as any)._maskFrameData = frameData;
+    (group as any)._inkColor = activeInkColor;
 
     fabricCanvas.add(group);
     fabricCanvas.setActiveObject(group);
@@ -678,29 +758,23 @@ export default function App() {
     saveHistory(fabricCanvas);
   };
 
-  // 汎用グループ化（通常オブジェクト・複数選択対応）
-  const createGeneralGroup = () => {
-    if (!fabricCanvas) return;
-    const activeObj = fabricCanvas.getActiveObject();
-    if (!activeObj) return;
-
-    if (activeObj.type === 'activeSelection') {
-      const selection = activeObj as fabric.ActiveSelection;
-      const group = selection.toGroup();
-      (group as any)._isGeneralGroup = true;
-      fabricCanvas.setActiveObject(group);
-      fabricCanvas.renderAll();
-      refreshObjectsList(fabricCanvas);
-      saveHistory(fabricCanvas);
-    }
-  };
-
-  // 汎用グループの解除
+  // 汎用グループの解除（右ナビ・マスク・汎用すべてのグループに対応）
   const ungroupGeneralGroup = () => {
     if (!fabricCanvas) return;
     const activeObj = fabricCanvas.getActiveObject() as any;
-    if (activeObj && (activeObj.type === 'group' || activeObj._isGeneralGroup) && !activeObj._isMaskGroup) {
+    if (!activeObj) return;
+
+    if (activeObj._isMaskGroup) {
+      removeMask();
+      return;
+    }
+
+    if (activeObj.type === 'group' || activeObj._isGeneralGroup) {
+      const items = activeObj.getObjects();
       activeObj.toActiveSelection();
+      fabricCanvas.discardActiveObject();
+      const sel = new fabric.ActiveSelection(items, { canvas: fabricCanvas });
+      fabricCanvas.setActiveObject(sel);
       fabricCanvas.renderAll();
       refreshObjectsList(fabricCanvas);
       saveHistory(fabricCanvas);
@@ -843,7 +917,7 @@ export default function App() {
     }
   };
 
-  // カラー更新（全体または個別枠・個別に画像のみ）
+  // カラー更新（全体・グループ一括変更・個別枠・個別に画像のみ対応）
   const changeInkColor = (hex: string, targetType: 'all' | 'frame' | 'image' = 'all') => {
     setActiveInkColor(hex);
     if (!fabricCanvas) return;
@@ -851,11 +925,34 @@ export default function App() {
     const activeObj = fabricCanvas.getActiveObject() as any;
     if (!activeObj) return;
 
-    if (activeObj.type === 'i-text') {
-      activeObj.set('fill', hex);
-    } else if (activeObj.type === 'rect' || activeObj.type === 'circle' || activeObj.type === 'path') {
-      if (activeObj.stroke) activeObj.set('stroke', hex);
-      if (activeObj.fill && activeObj.fill !== 'transparent') activeObj.set('fill', hex);
+    const applyColorToSingleObj = (target: any) => {
+      target._inkColor = hex;
+      if (target.type === 'i-text' || target.type === 'textbox') {
+        target.set('fill', hex);
+      } else if (target.type === 'rect' || target.type === 'circle' || target.type === 'path') {
+        if (target.stroke) target.set('stroke', hex);
+        if (target.fill && target.fill !== 'transparent') target.set('fill', hex);
+      } else if (target.type === 'image') {
+        if (target._originalImgElement) {
+          const thresh = target._threshold !== undefined ? target._threshold : threshold;
+          const newCanvas = applyMonochromeFilter(
+            target._originalImgElement,
+            thresh,
+            hex,
+            target._halftoneDotSize !== undefined ? target._halftoneDotSize : (halftoneEnabled ? halftoneDotSize : 0),
+            target._halftoneShape || halftoneShape
+          );
+          target.setElement(newCanvas);
+        }
+      }
+    };
+
+    activeObj._inkColor = hex;
+
+    // グループ一括変色のサポート
+    if (activeObj.type === 'group' || activeObj._isGeneralGroup) {
+      const children = activeObj.getObjects ? activeObj.getObjects() : [];
+      children.forEach((child: any) => applyColorToSingleObj(child));
     } else if (activeObj._isMaskGroup) {
       const groupObjs = activeObj.getObjects ? activeObj.getObjects() : [];
       const frame = groupObjs.find((o: any) => o.type !== 'image') || activeObj._frameShape;
@@ -866,32 +963,10 @@ export default function App() {
       }
 
       if ((targetType === 'all' || targetType === 'image') && targetImg) {
-        targetImg._inkColor = hex;
-        if (targetImg._originalImgElement) {
-          const thresh = targetImg._threshold !== undefined ? targetImg._threshold : threshold;
-          const newCanvas = applyMonochromeFilter(
-            targetImg._originalImgElement,
-            thresh,
-            hex,
-            targetImg._halftoneDotSize !== undefined ? targetImg._halftoneDotSize : (halftoneEnabled ? halftoneDotSize : 0),
-            targetImg._halftoneShape || halftoneShape
-          );
-          targetImg.setElement(newCanvas);
-        }
+        applyColorToSingleObj(targetImg);
       }
-    } else if (activeObj.type === 'image') {
-      activeObj._inkColor = hex;
-      if (activeObj._originalImgElement) {
-        const thresh = activeObj._threshold !== undefined ? activeObj._threshold : threshold;
-        const newCanvas = applyMonochromeFilter(
-          activeObj._originalImgElement,
-          thresh,
-          hex,
-          activeObj._halftoneDotSize !== undefined ? activeObj._halftoneDotSize : (halftoneEnabled ? halftoneDotSize : 0),
-          activeObj._halftoneShape || halftoneShape
-        );
-        activeObj.setElement(newCanvas);
-      }
+    } else {
+      applyColorToSingleObj(activeObj);
     }
 
     fabricCanvas.renderAll();
@@ -926,25 +1001,49 @@ export default function App() {
     }
   };
 
-  const addText = (isTitle: boolean) => {
+  // テキスト追加（見出し・本文・本文段落ブロック）
+  const addText = (type: 'title' | 'body' | 'paragraph') => {
     if (!fabricCanvas) return;
-    const size = isTitle ? parseInt(fontSizeInput, 10) || 36 : parseInt(fontSizeInput, 10) || 18;
-    const text = new fabric.IText(isTitle ? '見出しタイトル' : 'ここへ本文テキストを入力します。', {
-      left: 50,
-      top: 50,
-      fontFamily: fontFamily,
-      fontSize: size,
-      fontWeight: isTitle ? 'bold' : 'normal',
-      fill: activeInkColor,
-      charSpacing: charSpacing,
-      lineHeight: lineHeight,
-      textAlign: textAlign,
-      splitByGrapheme: writingMode === 'vertical',
-      stroke: textStrokeWidth > 0 ? textStrokeColor : undefined,
-      strokeWidth: textStrokeWidth,
-    });
-    fabricCanvas.add(text);
-    fabricCanvas.setActiveObject(text);
+    const size = type === 'title' ? parseInt(fontSizeInput, 10) || 36 : parseInt(fontSizeInput, 10) || 18;
+
+    if (type === 'paragraph') {
+      // 本文の段落ブロック（折り返し対応のTextbox）
+      const textbox = new fabric.Textbox('ここに本文の段落テキストを入力します。長文の文章も自動で折り返されて段落ブロックとして編集できます。', {
+        left: 50,
+        top: 50,
+        width: 300,
+        fontFamily: fontFamily,
+        fontSize: 16,
+        fill: activeInkColor,
+        charSpacing: charSpacing,
+        lineHeight: 1.5,
+        textAlign: textAlign,
+        splitByGrapheme: writingMode === 'vertical',
+        stroke: textStrokeWidth > 0 ? textStrokeColor : undefined,
+        strokeWidth: textStrokeWidth,
+      });
+      (textbox as any)._inkColor = activeInkColor;
+      fabricCanvas.add(textbox);
+      fabricCanvas.setActiveObject(textbox);
+    } else {
+      const text = new fabric.IText(type === 'title' ? '見出しタイトル' : 'ここへ本文テキストを入力します。', {
+        left: 50,
+        top: 50,
+        fontFamily: fontFamily,
+        fontSize: size,
+        fontWeight: type === 'title' ? 'bold' : 'normal',
+        fill: activeInkColor,
+        charSpacing: charSpacing,
+        lineHeight: lineHeight,
+        textAlign: textAlign,
+        splitByGrapheme: writingMode === 'vertical',
+        stroke: textStrokeWidth > 0 ? textStrokeColor : undefined,
+        strokeWidth: textStrokeWidth,
+      });
+      (text as any)._inkColor = activeInkColor;
+      fabricCanvas.add(text);
+      fabricCanvas.setActiveObject(text);
+    }
   };
 
   const addRectangle = () => {
@@ -961,6 +1060,7 @@ export default function App() {
       originX: 'center',
       originY: 'center',
     });
+    (rect as any)._inkColor = activeInkColor;
     fabricCanvas.add(rect);
     fabricCanvas.setActiveObject(rect);
   };
@@ -978,6 +1078,7 @@ export default function App() {
       originX: 'center',
       originY: 'center',
     });
+    (circle as any)._inkColor = activeInkColor;
     fabricCanvas.add(circle);
     fabricCanvas.setActiveObject(circle);
   };
@@ -998,6 +1099,7 @@ export default function App() {
         originX: 'center',
         originY: 'center',
       });
+      (star as any)._inkColor = activeInkColor;
       fabricCanvas.add(star);
       fabricCanvas.setActiveObject(star);
     } else if (presetId === 'ribbon_border') {
@@ -1011,6 +1113,7 @@ export default function App() {
         originX: 'center',
         originY: 'center',
       });
+      (line as any)._inkColor = activeInkColor;
       fabricCanvas.add(line);
       fabricCanvas.setActiveObject(line);
     } else if (presetId === 'stamp_frame') {
@@ -1025,6 +1128,7 @@ export default function App() {
         originX: 'center',
         originY: 'center',
       });
+      (circle as any)._inkColor = activeInkColor;
       fabricCanvas.add(circle);
       fabricCanvas.setActiveObject(circle);
     } else if (presetId === 'retro_arrow') {
@@ -1035,6 +1139,7 @@ export default function App() {
         originX: 'center',
         originY: 'center',
       });
+      (arrow as any)._inkColor = activeInkColor;
       fabricCanvas.add(arrow);
       fabricCanvas.setActiveObject(arrow);
     }
@@ -1099,7 +1204,7 @@ export default function App() {
     const num = parseInt(valStr, 10);
     if (!isNaN(num) && num > 0 && fabricCanvas) {
       const activeObj = fabricCanvas.getActiveObject();
-      if (activeObj && activeObj.type === 'i-text') {
+      if (activeObj && (activeObj.type === 'i-text' || activeObj.type === 'textbox')) {
         (activeObj as fabric.IText).set('fontSize', num);
         fabricCanvas.renderAll();
         saveHistory(fabricCanvas);
@@ -1111,7 +1216,7 @@ export default function App() {
   const updateTextProp = (key: string, val: any) => {
     if (!fabricCanvas) return;
     const activeObj = fabricCanvas.getActiveObject();
-    if (activeObj && activeObj.type === 'i-text') {
+    if (activeObj && (activeObj.type === 'i-text' || activeObj.type === 'textbox')) {
       activeObj.set(key as any, val);
       fabricCanvas.renderAll();
       saveHistory(fabricCanvas);
@@ -1123,7 +1228,7 @@ export default function App() {
     setWritingMode(mode);
     if (!fabricCanvas) return;
     const activeObj = fabricCanvas.getActiveObject() as any;
-    if (activeObj && activeObj.type === 'i-text') {
+    if (activeObj && (activeObj.type === 'i-text' || activeObj.type === 'textbox')) {
       if (mode === 'vertical') {
         activeObj.set({
           splitByGrapheme: true,
@@ -1142,7 +1247,7 @@ export default function App() {
     setFontFamily(family);
     if (!fabricCanvas) return;
     const activeObj = fabricCanvas.getActiveObject();
-    if (activeObj && activeObj.type === 'i-text') {
+    if (activeObj && (activeObj.type === 'i-text' || activeObj.type === 'textbox')) {
       (activeObj as fabric.IText).set('fontFamily', family);
       fabricCanvas.renderAll();
       saveHistory(fabricCanvas);
@@ -1163,7 +1268,7 @@ export default function App() {
     tempCanvas.height = imgElement.height;
 
     let r = 0, g = 0, b = 0;
-    if (colorHex.startsWith('#')) {
+    if (colorHex && colorHex.startsWith('#')) {
       const hex = colorHex.replace('#', '');
       if (hex.length === 3) {
         r = parseInt(hex[0] + hex[0], 16);
@@ -1354,6 +1459,7 @@ export default function App() {
       '_halftoneShape',
       '_isGuideLine',
       '_isGridLine',
+      'visible',
     ]);
 
     const projectData = {
@@ -1531,25 +1637,45 @@ export default function App() {
     saveHistory(fabricCanvas);
   };
 
-  const moveLayer = (index: number, direction: 'up' | 'down') => {
+  // レイヤー複製機能
+  const duplicateSelectedLayer = (targetObj?: fabric.Object) => {
     if (!fabricCanvas) return;
+    const objToClone = targetObj || fabricCanvas.getActiveObject();
+    if (!objToClone) return;
 
-    const targetIndex = direction === 'up' ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= objectsList.length) return;
+    objToClone.clone((cloned: fabric.Object) => {
+      cloned.set({
+        left: (cloned.left || 0) + 15,
+        top: (cloned.top || 0) + 15,
+      });
+      (cloned as any)._customName = (objToClone as any)._customName ? `${(objToClone as any)._customName} (コピー)` : undefined;
+      (cloned as any)._inkColor = (objToClone as any)._inkColor;
 
-    const currentCanvasObjs = fabricCanvas.getObjects().filter((o) => !(o as any)._isGuideLine && !(o as any)._isGridLine);
-    const draggedObj = objectsList[index];
-    const targetObj = objectsList[targetIndex];
-
-    const realFromIdx = currentCanvasObjs.indexOf(draggedObj);
-    const realTargetIdx = currentCanvasObjs.indexOf(targetObj);
-
-    if (realFromIdx !== -1 && realTargetIdx !== -1) {
-      fabricCanvas.moveObjectTo(draggedObj, realTargetIdx);
+      fabricCanvas.add(cloned);
+      fabricCanvas.setActiveObject(cloned);
       fabricCanvas.renderAll();
       refreshObjectsList(fabricCanvas);
       saveHistory(fabricCanvas);
-    }
+    });
+  };
+
+  // レイヤー表示・非表示の切り替え
+  const toggleVisibility = (obj: fabric.Object, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!fabricCanvas) return;
+    obj.set('visible', !obj.visible);
+    fabricCanvas.renderAll();
+    refreshObjectsList(fabricCanvas);
+    saveHistory(fabricCanvas);
+  };
+
+  // グループの開閉アコーディオン切り替え
+  const toggleGroupExpand = (index: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpandedGroups((prev) => ({
+      ...prev,
+      [index]: !prev[index],
+    }));
   };
 
   // レイヤー名変更
@@ -1627,7 +1753,7 @@ export default function App() {
     const fileName = prompt('保存するファイル名を入力してください:', defaultName);
     if (!fileName) return;
 
-    guideLinesRef.current.forEach((line) => fabricCanvas.remove(line));
+    guideLinesRef.current.forEach((obj) => fabricCanvas.remove(obj));
     gridLinesRef.current.forEach((line) => fabricCanvas.remove(line));
 
     const originalBg = fabricCanvas.backgroundColor;
@@ -1656,20 +1782,21 @@ export default function App() {
     link.click();
   };
 
+  // レイヤー一覧用テキスト（アイコン非表示で名称のみ）
   const getObjectLabel = (obj: any) => {
     if (obj._customName && obj._customName.trim() !== '') {
       return obj._customName;
     }
-    if (obj._isMaskGroup) return '📦 マスクグループ';
-    if (obj._isGeneralGroup || obj.type === 'group') return '📁 レイヤーグループ';
-    if (obj.type === 'i-text') {
+    if (obj._isMaskGroup) return 'マスクグループ';
+    if (obj._isGeneralGroup || obj.type === 'group') return 'レイヤーグループ';
+    if (obj.type === 'i-text' || obj.type === 'textbox') {
       const txt = (obj as fabric.IText).text || '';
-      return `🔤 ${txt.slice(0, 10)}${txt.length > 10 ? '...' : ''}`;
+      return `${txt.slice(0, 12)}${txt.length > 12 ? '...' : ''}`;
     }
-    if (obj.type === 'rect') return '🔲 四角枠';
-    if (obj.type === 'circle') return '⚪ 円枠';
-    if (obj.type === 'path') return '🎨 パス・素材パーツ';
-    if (obj.type === 'image') return '🖼 画像';
+    if (obj.type === 'rect') return '四角枠';
+    if (obj.type === 'circle') return '円枠';
+    if (obj.type === 'path') return 'パス・素材パーツ';
+    if (obj.type === 'image') return '画像';
     return 'パーツ';
   };
 
@@ -1783,14 +1910,17 @@ export default function App() {
           </div>
         </div>
 
-        {/* 素材追加 */}
+        {/* 素材追加（見出し・本文・本文段落ブロックに対応） */}
         <div>
           <label style={labelStyle}>3. 素材を追加</label>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <div style={{ display: 'flex', gap: '6px' }}>
-              <button onClick={() => addText(true)} style={{ ...btnStyle, flex: 1 }}>＋ 見出し</button>
-              <button onClick={() => addText(false)} style={{ ...btnStyle, flex: 1 }}>＋ 本文</button>
+              <button onClick={() => addText('title')} style={{ ...btnStyle, flex: 1 }}>＋ 見出し</button>
+              <button onClick={() => addText('body')} style={{ ...btnStyle, flex: 1 }}>＋ 本文</button>
             </div>
+            <button onClick={() => addText('paragraph')} style={{ ...btnStyle, textAlign: 'center' }}>
+              ＋ 本文の段落ブロック
+            </button>
             <div style={{ display: 'flex', gap: '6px' }}>
               <button onClick={addRectangle} style={{ ...btnStyle, flex: 1 }}>＋ 四角枠</button>
               <button onClick={addCircle} style={{ ...btnStyle, flex: 1 }}>＋ 円枠</button>
@@ -1802,43 +1932,11 @@ export default function App() {
           </div>
         </div>
 
-        {/* スタンプ・素材ライブラリ (追加機能) */}
-        <div style={{ backgroundColor: '#fffbebfb', padding: '10px', borderRadius: '8px', border: '1px solid #fef3c7' }}>
-          <label style={{ ...labelStyle, color: '#92400e', marginBottom: '6px' }}>🎨 スタンプ・素材ライブラリ</label>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <span style={{ fontSize: '10px', color: '#78350f', fontWeight: 'bold' }}>切り抜き・装飾アルファベット文字</span>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px' }}>
-              {RETRO_TEXT_STYLES.map((st, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => addRetroTextStyle(st)}
-                  style={{ ...btnStyle, fontSize: '10px', backgroundColor: '#ffffff', borderColor: '#fde68a', cursor: 'pointer' }}
-                >
-                  ➕ {st.label}
-                </button>
-              ))}
-            </div>
-
-            <span style={{ fontSize: '10px', color: '#78350f', fontWeight: 'bold', marginTop: '4px' }}>レトロフレーム・飾り罫線</span>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px' }}>
-              {STAMP_PRESETS.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => addStampPreset(p.id)}
-                  style={{ ...btnStyle, fontSize: '10px', backgroundColor: '#ffffff', borderColor: '#fde68a', cursor: 'pointer' }}
-                >
-                  ➕ {p.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
         {/* 編集プロパティ */}
         <div style={{ backgroundColor: '#f9fafb', padding: '10px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
           <label style={{ ...labelStyle, marginBottom: '6px' }}>4. 選択中パーツの編集</label>
 
-          {/* 図形の自由変形 (Skew) (追加機能) */}
+          {/* 自由変形 (Skew) */}
           <div style={{ marginBottom: '10px', borderTop: '1px dashed #d1d5db', paddingTop: '6px' }}>
             <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>自由変形 (歪み・斜体)</span>
             <div style={{ display: 'flex', gap: '8px' }}>
@@ -1867,7 +1965,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* グループ選択時の個別色指定パネル */}
+          {/* グループ選択時・通常選択時のカラー変更（一括適用対応） */}
           {hasMask ? (
             <div style={{ marginBottom: '10px', backgroundColor: '#ffffff', padding: '8px', borderRadius: '6px', border: '1px solid #d1d5db' }}>
               <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#111827', display: 'block', marginBottom: '6px' }}>
@@ -1918,7 +2016,7 @@ export default function App() {
               </div>
             </div>
           ) : (
-            /* 通常パーツ用インクカラー選択＆カスタムカラー指定 */
+            /* 通常パーツ・一般グループ用インクカラー選択 ＆ カスタムカラー指定 */
             <div style={{ marginBottom: '10px' }}>
               <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>プリント（文字・画像・枠）の色</span>
               <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '6px' }}>
@@ -1958,7 +2056,7 @@ export default function App() {
             </div>
           )}
 
-          {/* 四角枠・丸枠の塗りつぶし設定 */}
+          {/* 四角枠・丸枠の塗りつぶし設定（背景と同化しない視認性の高い「透明」アイコン） */}
           {(selectedObjectType === 'rect' || selectedObjectType === 'circle' || selectedObjectType === 'path') && (
             <div style={{ marginBottom: '8px', borderTop: '1px dashed #d1d5db', paddingTop: '6px' }}>
               <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>図形の中の塗りつぶし</span>
@@ -1966,26 +2064,27 @@ export default function App() {
                 <button
                   onClick={() => changeShapeFillColor('transparent')}
                   style={{
-                    padding: '2px 8px',
-                    fontSize: '10px',
+                    padding: '3px 8px',
+                    fontSize: '11px',
                     borderRadius: '4px',
-                    border: shapeFillColor === 'transparent' ? '2px solid #000' : '1px solid #d1d5db',
+                    border: shapeFillColor === 'transparent' ? '2.5px solid #1e293b' : '2px solid #94a3b8',
                     backgroundColor: '#ffffff',
-                    backgroundImage: `linear-gradient(45deg, #e2e8f0 25%, transparent 25%), 
-                                      linear-gradient(-45deg, #e2e8f0 25%, transparent 25%), 
-                                      linear-gradient(45deg, transparent 75%, #e2e8f0 75%), 
-                                      linear-gradient(-45deg, transparent 75%, #e2e8f0 75%)`,
+                    backgroundImage: `linear-gradient(45deg, #cbd5e1 25%, transparent 25%), 
+                                      linear-gradient(-45deg, #cbd5e1 25%, transparent 25%), 
+                                      linear-gradient(45deg, transparent 75%, #cbd5e1 75%), 
+                                      linear-gradient(-45deg, transparent 75%, #cbd5e1 75%)`,
                     backgroundSize: '8px 8px',
                     backgroundPosition: '0 0, 0 4px, 4px -4px, -4px 0',
-                    color: '#000000',
+                    color: '#0f172a',
                     fontWeight: 'bold',
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
                     gap: '4px',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
                   }}
                 >
-                  <span style={{ backgroundColor: '#ffffff', padding: '0 2px', borderRadius: '2px' }}>透明</span>
+                  <span style={{ backgroundColor: '#ffffff', padding: '0 4px', borderRadius: '2px', border: '1px solid #cbd5e1' }}>透明</span>
                 </button>
                 <input
                   type="color"
@@ -2188,7 +2287,7 @@ export default function App() {
                 />
               </div>
 
-              {/* トーン・網点処理 (Halftone) パネル (追加機能) */}
+              {/* トーン・網点処理 (Halftone) パネル */}
               <div style={{ backgroundColor: '#ffffff', padding: '8px', borderRadius: '6px', border: '1px solid #d1d5db' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer', marginBottom: '4px' }}>
                   <input
@@ -2281,6 +2380,38 @@ export default function App() {
           )}
         </div>
 
+        {/* スタンプ・素材ライブラリ（「選択中のパーツの編集」の下へ移動） */}
+        <div style={{ backgroundColor: '#fffbebfb', padding: '10px', borderRadius: '8px', border: '1px solid #fef3c7' }}>
+          <label style={{ ...labelStyle, color: '#92400e', marginBottom: '6px' }}>🎨 スタンプ・素材ライブラリ</label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <span style={{ fontSize: '10px', color: '#78350f', fontWeight: 'bold' }}>切り抜き・装飾アルファベット文字</span>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px' }}>
+              {RETRO_TEXT_STYLES.map((st, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => addRetroTextStyle(st)}
+                  style={{ ...btnStyle, fontSize: '10px', backgroundColor: '#ffffff', borderColor: '#fde68a', cursor: 'pointer' }}
+                >
+                  ➕ {st.label}
+                </button>
+              ))}
+            </div>
+
+            <span style={{ fontSize: '10px', color: '#78350f', fontWeight: 'bold', marginTop: '4px' }}>レトロフレーム・飾り罫線</span>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px' }}>
+              {STAMP_PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => addStampPreset(p.id)}
+                  style={{ ...btnStyle, fontSize: '10px', backgroundColor: '#ffffff', borderColor: '#fde68a', cursor: 'pointer' }}
+                >
+                  ➕ {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
         <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
           <button onClick={undo} style={{ ...btnStyle, backgroundColor: '#f3f4f6', color: '#374151', textAlign: 'center' }}>
             ↩ 元に戻す (Undo)
@@ -2300,7 +2431,17 @@ export default function App() {
       </div>
 
       {/* キャンバスエリア */}
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', overflow: 'auto' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '20px', overflow: 'auto', position: 'relative' }}>
+        {/* 余白サイズインジケーター表示 */}
+        {marginGuides && (
+          <div style={{ position: 'absolute', top: '12px', backgroundColor: '#1e293b', color: '#ffffff', padding: '4px 12px', borderRadius: '20px', fontSize: '11px', display: 'flex', gap: '12px', boxShadow: '0 2px 8px rgba(0,0,0,0.15)', zIndex: 10 }}>
+            <span>上余白: <strong>{marginGuides.top}px</strong></span>
+            <span>下余白: <strong>{marginGuides.bottom}px</strong></span>
+            <span>左余白: <strong>{marginGuides.left}px</strong></span>
+            <span>右余白: <strong>{marginGuides.right}px</strong></span>
+          </div>
+        )}
+
         <div style={{ boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)', border: '1px solid #d1d5db', lineHeight: 0 }}>
           <canvas ref={canvasRef} />
         </div>
@@ -2310,7 +2451,7 @@ export default function App() {
       <div style={{ width: '280px', backgroundColor: '#ffffff', borderLeft: '1px solid #e5e7eb', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px', boxSizing: 'border-box' }}>
         <h2 style={{ fontSize: '14px', fontWeight: 'bold', margin: '0', color: '#111827' }}>レイヤー一覧</h2>
 
-        {/* レイヤーの重なり位置操作 ＆ グループ解除ボタン */}
+        {/* レイヤーの重なり位置操作 ＆ グループ解除 ＆ 複製ボタン */}
         {activeObject && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', backgroundColor: '#f8fafc', padding: '6px', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px' }}>
@@ -2319,11 +2460,16 @@ export default function App() {
               <button onClick={() => moveLayerOrder('sendBackwards')} style={layerOrderBtnStyle}>⬇ 背面へ</button>
               <button onClick={() => moveLayerOrder('sendToBack')} style={layerOrderBtnStyle}>🔝 最背面へ</button>
             </div>
-            {((activeObject as any).type === 'group' || (activeObject as any)._isGeneralGroup) && !(activeObject as any)._isMaskGroup && (
-              <button onClick={ungroupGeneralGroup} style={{ ...btnStyle, fontSize: '11px', textAlign: 'center', backgroundColor: '#ffffff', borderColor: '#cbd5e1' }}>
-                🔓 グループ解除
+            <div style={{ display: 'flex', gap: '4px' }}>
+              <button onClick={() => duplicateSelectedLayer()} style={{ ...btnStyle, flex: 1, fontSize: '11px', textAlign: 'center', backgroundColor: '#ffffff', borderColor: '#cbd5e1' }}>
+                📋 レイヤー複製
               </button>
-            )}
+              {((activeObject as any).type === 'group' || (activeObject as any)._isGeneralGroup || (activeObject as any)._isMaskGroup) && (
+                <button onClick={ungroupGeneralGroup} style={{ ...btnStyle, flex: 1, fontSize: '11px', textAlign: 'center', backgroundColor: '#ffffff', borderColor: '#cbd5e1' }}>
+                  🔓 グループ解除
+                </button>
+              )}
+            </div>
           </div>
         )}
 
@@ -2333,8 +2479,9 @@ export default function App() {
           ) : (
             objectsList.map((obj: any, index) => {
               const isSelected = isObjectInSelection(obj);
-              const isDragging = draggedIndex === index;
-              const isTargeted = dragOverIndex === index;
+              const isGroup = obj.type === 'group' || obj._isGeneralGroup || obj._isMaskGroup;
+              const isExpanded = expandedGroups[index];
+              const groupItems = isGroup && obj.getObjects ? obj.getObjects() : [];
 
               return (
                 <div
@@ -2350,103 +2497,117 @@ export default function App() {
                     onDrop={(e) => handleDrop(e, index)}
                     onClick={(e) => handleLayerClick(obj, e)}
                     style={{
-                      padding: '6px 8px',
-                      fontSize: '12px',
-                      borderRadius: '6px',
-                      border: '2px dashed',
-                      borderColor: isTargeted ? '#2563eb' : isSelected ? '#000000' : '#e5e7eb',
-                      backgroundColor: isTargeted ? '#eff6ff' : isSelected ? '#f3f4f6' : '#ffffff',
-                      opacity: isDragging ? 0.4 : 1,
-                      fontWeight: isSelected ? 'bold' : 'normal',
-                      cursor: 'grab',
                       display: 'flex',
                       alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '4px',
+                      justify: 'space-between',
+                      padding: '8px 10px',
+                      fontSize: '12px',
+                      borderRadius: '6px',
+                      border: isSelected ? '2px solid #2563eb' : '1px solid #e5e7eb',
+                      backgroundColor: isSelected ? '#eff6ff' : dragOverIndex === index ? '#f0fdf4' : '#ffffff',
+                      cursor: 'pointer',
                       userSelect: 'none',
+                      opacity: obj.visible === false ? 0.4 : 1,
                     }}
                   >
-                    {/* レイヤー名 ＆ 名前編集ボタン */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', overflow: 'hidden', flex: 1 }}>
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden', flex: 1 }}>
+                      {/* グループ展開用矢印ボタン */}
+                      {isGroup ? (
+                        <span
+                          onClick={(e) => toggleGroupExpand(index, e)}
+                          style={{ fontSize: '10px', padding: '2px', color: '#64748b', cursor: 'pointer' }}
+                        >
+                          {isExpanded ? '▼' : '▶'}
+                        </span>
+                      ) : null}
+
+                      {/* レイヤー名（アイコン非表示で名前のみ） */}
+                      <span
+                        onDoubleClick={(e) => renameLayer(obj, e)}
+                        style={{
+                          fontWeight: isSelected ? 'bold' : 'normal',
+                          color: '#1f2937',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                        title="ダブルクリックで名前を変更"
+                      >
                         {getObjectLabel(obj)}
                       </span>
-                      <button
-                        onClick={(e) => renameLayer(obj, e)}
-                        style={{
-                          border: 'none',
-                          background: 'none',
-                          cursor: 'pointer',
-                          padding: '0 2px',
-                          fontSize: '11px',
-                          opacity: 0.6,
-                        }}
-                        title="レイヤー名を変更"
-                      >
-                        ✏️
-                      </button>
                     </div>
 
-                    {/* レイヤー削除ボタン ＆ 順序変更ボタン */}
-                    <div style={{ display: 'flex', gap: '3px', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      {/* 表示・非表示切り替え */}
+                      <button
+                        onClick={(e) => toggleVisibility(obj, e)}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '12px', padding: '2px' }}
+                        title={obj.visible === false ? '表示する' : '非表示にする'}
+                      >
+                        {obj.visible === false ? '🙈' : '👁'}
+                      </button>
+
+                      {/* 複製ボタン */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          duplicateSelectedLayer(obj);
+                        }}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', padding: '2px' }}
+                        title="複製"
+                      >
+                        📋
+                      </button>
+
+                      {/* 削除ボタン */}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           deleteSelected(obj);
                         }}
-                        style={{
-                          border: '1px solid #fca5a5',
-                          backgroundColor: '#fef2f2',
-                          color: '#dc2626',
-                          borderRadius: '3px',
-                          padding: '2px 4px',
-                          fontSize: '10px',
-                          cursor: 'pointer',
-                        }}
-                        title="このレイヤーを削除"
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: '12px', padding: '2px' }}
+                        title="削除"
                       >
-                        🗑
-                      </button>
-                      <button
-                        disabled={index === 0}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          moveLayer(index, 'up');
-                        }}
-                        style={{
-                          border: '1px solid #d1d5db',
-                          backgroundColor: index === 0 ? '#f3f4f6' : '#ffffff',
-                          color: index === 0 ? '#9ca3af' : '#374151',
-                          borderRadius: '3px',
-                          padding: '2px 4px',
-                          fontSize: '10px',
-                          cursor: index === 0 ? 'default' : 'pointer',
-                        }}
-                        title="前（上）に移動"
-                      >
-                        ▲
-                      </button>
-                      <button
-                        disabled={index === objectsList.length - 1}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          moveLayer(index, 'down');
-                        }}
-                        style={{
-                          border: '1px solid #d1d5db',
-                          backgroundColor: index === objectsList.length - 1 ? '#f3f4f6' : '#ffffff',
-                          color: index === objectsList.length - 1 ? '#9ca3af' : '#374151',
-                          borderRadius: '3px',
-                          padding: '2px 4px',
-                          fontSize: '10px',
-                          cursor: index === objectsList.length - 1 ? 'default' : 'pointer',
-                        }}
-                        title="後（下）に移動"
-                      >
-                        ▼
+                        ✕
                       </button>
                     </div>
                   </div>
+
+                  {/* グループ内個別要素の展開・個別選択表示 */}
+                  {isGroup && isExpanded && (
+                    <div style={{ marginLeft: '16px', display: 'flex', flexDirection: 'column', gap: '4px', borderLeft: '2px solid #cbd5e1', paddingLeft: '8px' }}>
+                      {groupItems.map((childObj: any, childIdx: number) => {
+                        const isChildSelected = activeObject === childObj;
+                        return (
+                          <div
+                            key={childIdx}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (fabricCanvas) {
+                                fabricCanvas.setActiveObject(childObj);
+                                fabricCanvas.renderAll();
+                              }
+                            }}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justify: 'space-between',
+                              padding: '4px 8px',
+                              fontSize: '11px',
+                              borderRadius: '4px',
+                              border: isChildSelected ? '1.5px solid #2563eb' : '1px solid #f1f5f9',
+                              backgroundColor: isChildSelected ? '#dbeafe' : '#f8fafc',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#475569' }}>
+                              {getObjectLabel(childObj)}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             })
