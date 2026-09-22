@@ -728,7 +728,6 @@ export default function App() {
     saveHistory(fabricCanvas);
   };
 
-  // 汎用グループの解除（解除不能バグの完全修正）
   const ungroupGeneralGroup = () => {
     if (!fabricCanvas) return;
     const activeObj = fabricCanvas.getActiveObject() as any;
@@ -890,7 +889,6 @@ export default function App() {
     }
   };
 
-  // カラー更新（マスクグループ内の画像の色変更対応を修復）
   const changeInkColor = (hex: string, targetType: 'all' | 'frame' | 'image' = 'all') => {
     setActiveInkColor(hex);
     if (!fabricCanvas) return;
@@ -971,7 +969,6 @@ export default function App() {
     }
   };
 
-  // テキスト追加（段落ブロックの横幅を200pxに修正）
   const addText = (type: 'title' | 'body' | 'paragraph') => {
     if (!fabricCanvas) return;
     const size = type === 'title' ? 32 : 16;
@@ -1647,7 +1644,6 @@ export default function App() {
     }
   };
 
-  // レイヤー一覧からの選択（グループ内個別レイヤーの直接選択・アクティブ化サポート）
   const handleLayerClick = (obj: fabric.Object, e: React.MouseEvent) => {
     if (!fabricCanvas) return;
 
@@ -2519,7 +2515,6 @@ export default function App() {
                           }}
                         >
                           <span>{getObjectLabel(child)}</span>
-                          <span style={{ fontSize: '9px', color: '#64748b' }}>個別パーツ</span>
                         </div>
                       ))}
                     </div>
