@@ -40,6 +40,7 @@ const DEFAULT_FONTS = [
   { name: 'クラシック見出し（欧文風）', family: '"Times New Roman", Times, "Georgia", serif' },
 ];
 
+// スタンプ・素材ライブラリ用プリセット
 const STAMP_PRESETS = [
   { id: 'star_badge', label: '★ SALEバッジ', type: 'shape', path: 'star' },
   { id: 'ribbon_border', label: '〓 ギザギザ罫線', type: 'shape', path: 'zigzag' },
@@ -47,6 +48,7 @@ const STAMP_PRESETS = [
   { id: 'retro_arrow', label: '➔ レトロ矢印', type: 'shape', path: 'arrow' },
 ];
 
+// 添付画像風の切り抜き・装飾文字スタイル（Ransom Letter / Collage Style）
 const RETRO_TEXT_STYLES = [
   { label: '切り抜きパンク文字 (A)', text: 'A', bg: '#000000', color: '#ffffff', font: 'Impact', skew: -8 },
   { label: '切り抜きビンテージ (B)', text: 'B', bg: '#e60012', color: '#ffffff', font: 'Georgia', skew: 5 },
@@ -206,7 +208,6 @@ export default function App() {
         '_halftoneShape',
         '_isGuideLine',
         '_isGridLine',
-        'visible',
       ])
     );
 
@@ -345,7 +346,6 @@ export default function App() {
       width: size.width,
       height: size.height,
       backgroundColor: paperColor,
-      preserveObjectStacking: true, // 下のレイヤー選択時に他のレイヤーが非表示・再描画乱れを起こさないよう固定
     });
 
     historyRef.current = [];
@@ -368,14 +368,6 @@ export default function App() {
       guideLinesRef.current.push(line);
     };
 
-    // 余白（オブジェクト以外）クリックで選択解除
-    canvas.on('mouse:down', (options) => {
-      if (!options.target) {
-        canvas.discardActiveObject();
-        canvas.renderAll();
-      }
-    });
-
     // ガイド＆スナップ機能
     canvas.on('object:moving', (e) => {
       clearGuides();
@@ -387,6 +379,7 @@ export default function App() {
       let targetTop = target.top || 0;
 
       if (enableSnap) {
+        // グリッド吸着
         if (showGrid) {
           const snappedLeft = Math.round(targetLeft / gridSize) * gridSize;
           const snappedTop = Math.round(targetTop / gridSize) * gridSize;
@@ -399,6 +392,7 @@ export default function App() {
           }
         }
 
+        // オブジェクト・キャンバス中央スナップ
         const targetBBox = target.getBoundingRect();
         const targetCenter = target.getCenterPoint();
 
@@ -412,7 +406,7 @@ export default function App() {
         }
 
         canvas.getObjects().forEach((obj) => {
-          if (obj === target || (obj as any)._isGuideLine || (obj as any)._isGridLine || (obj as any)._isTempFrame || !obj.visible) return;
+          if (obj === target || (obj as any)._isGuideLine || (obj as any)._isGridLine || (obj as any)._isTempFrame) return;
 
           const objBBox = obj.getBoundingRect();
           const objCenter = obj.getCenterPoint();
@@ -558,6 +552,7 @@ export default function App() {
         return;
       }
 
+      // Delete または Backspace で選択要素の削除
       if (e.key === 'Delete' || e.key === 'Backspace') {
         const activeObj = fabricCanvas.getActiveObject();
         if (activeObj && activeObj.type === 'i-text' && (activeObj as fabric.IText).isEditing) {
@@ -669,7 +664,21 @@ export default function App() {
     saveHistory(fabricCanvas);
   };
 
-  // 汎用グループ化（複数選択・通常オブジェクト）
+  // 2つのオブジェクトからグループを作成（ドラッグ＆ドロップ用）
+  const createGroupFromObjects = (obj1: fabric.Object, obj2: fabric.Object) => {
+    if (!fabricCanvas) return;
+    const group = new fabric.Group([obj1, obj2]);
+    (group as any)._isGeneralGroup = true;
+    fabricCanvas.remove(obj1);
+    fabricCanvas.remove(obj2);
+    fabricCanvas.add(group);
+    fabricCanvas.setActiveObject(group);
+    fabricCanvas.renderAll();
+    refreshObjectsList(fabricCanvas);
+    saveHistory(fabricCanvas);
+  };
+
+  // 汎用グループ化（通常オブジェクト・複数選択対応）
   const createGeneralGroup = () => {
     if (!fabricCanvas) return;
     const activeObj = fabricCanvas.getActiveObject();
@@ -696,58 +705,6 @@ export default function App() {
       refreshObjectsList(fabricCanvas);
       saveHistory(fabricCanvas);
     }
-  };
-
-  // レイヤーの複製機能
-  const duplicateObject = (targetObj?: fabric.Object) => {
-    if (!fabricCanvas) return;
-    const objToClone = targetObj || fabricCanvas.getActiveObject();
-    if (!objToClone) return;
-
-    objToClone.clone((cloned: fabric.Object) => {
-      cloned.set({
-        left: (cloned.left || 0) + 15,
-        top: (cloned.top || 0) + 15,
-        evented: true,
-        visible: true,
-      });
-
-      if ((objToClone as any)._isGeneralGroup) {
-        (cloned as any)._isGeneralGroup = true;
-      }
-      if ((objToClone as any)._isMaskGroup) {
-        (cloned as any)._isMaskGroup = true;
-      }
-      if ((objToClone as any)._customName) {
-        (cloned as any)._customName = `${(objToClone as any)._customName} のコピー`;
-      }
-
-      fabricCanvas.add(cloned);
-      fabricCanvas.setActiveObject(cloned);
-      fabricCanvas.renderAll();
-      refreshObjectsList(fabricCanvas);
-      saveHistory(fabricCanvas);
-    });
-  };
-
-  // レイヤー表示 / 非表示切り替え
-  const toggleVisibility = (obj: fabric.Object, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!fabricCanvas) return;
-
-    const newVisible = !obj.visible;
-    obj.set({
-      visible: newVisible,
-      evented: newVisible, // 非表示時はクリック選択不可に設定
-    });
-
-    if (!newVisible && fabricCanvas.getActiveObject() === obj) {
-      fabricCanvas.discardActiveObject();
-    }
-
-    fabricCanvas.renderAll();
-    refreshObjectsList(fabricCanvas);
-    saveHistory(fabricCanvas);
   };
 
   // マスク編集モード
@@ -886,7 +843,7 @@ export default function App() {
     }
   };
 
-  // カラー更新
+  // カラー更新（全体または個別枠・個別に画像のみ）
   const changeInkColor = (hex: string, targetType: 'all' | 'frame' | 'image' = 'all') => {
     setActiveInkColor(hex);
     if (!fabricCanvas) return;
@@ -971,7 +928,7 @@ export default function App() {
 
   const addText = (isTitle: boolean) => {
     if (!fabricCanvas) return;
-    const size = isTitle ? 36 : 18;
+    const size = isTitle ? parseInt(fontSizeInput, 10) || 36 : parseInt(fontSizeInput, 10) || 18;
     const text = new fabric.IText(isTitle ? '見出しタイトル' : 'ここへ本文テキストを入力します。', {
       left: 50,
       top: 50,
@@ -982,6 +939,9 @@ export default function App() {
       charSpacing: charSpacing,
       lineHeight: lineHeight,
       textAlign: textAlign,
+      splitByGrapheme: writingMode === 'vertical',
+      stroke: textStrokeWidth > 0 ? textStrokeColor : undefined,
+      strokeWidth: textStrokeWidth,
     });
     fabricCanvas.add(text);
     fabricCanvas.setActiveObject(text);
@@ -1022,6 +982,7 @@ export default function App() {
     fabricCanvas.setActiveObject(circle);
   };
 
+  // レトロスタンプ・パーツプリセット追加
   const addStampPreset = (presetId: string) => {
     if (!fabricCanvas) return;
 
@@ -1079,6 +1040,7 @@ export default function App() {
     }
   };
 
+  // 切り抜き文字・装飾レタリング素材追加（添付画像スタイル）
   const addRetroTextStyle = (style: typeof RETRO_TEXT_STYLES[0]) => {
     if (!fabricCanvas) return;
 
@@ -1137,51 +1099,39 @@ export default function App() {
     const num = parseInt(valStr, 10);
     if (!isNaN(num) && num > 0 && fabricCanvas) {
       const activeObj = fabricCanvas.getActiveObject();
-      if (activeObj) {
-        if (activeObj.type === 'i-text') {
-          (activeObj as fabric.IText).set('fontSize', num);
-        } else if (activeObj.type === 'activeSelection') {
-          (activeObj as fabric.ActiveSelection).getObjects().forEach((o) => {
-            if (o.type === 'i-text') (o as fabric.IText).set('fontSize', num);
-          });
-        }
+      if (activeObj && activeObj.type === 'i-text') {
+        (activeObj as fabric.IText).set('fontSize', num);
         fabricCanvas.renderAll();
         saveHistory(fabricCanvas);
       }
     }
   };
 
+  // テキスト属性変更
   const updateTextProp = (key: string, val: any) => {
     if (!fabricCanvas) return;
     const activeObj = fabricCanvas.getActiveObject();
-    if (activeObj) {
-      if (activeObj.type === 'i-text') {
-        activeObj.set(key as any, val);
-      } else if (activeObj.type === 'activeSelection') {
-        (activeObj as fabric.ActiveSelection).getObjects().forEach((o) => {
-          if (o.type === 'i-text') o.set(key as any, val);
-        });
-      }
+    if (activeObj && activeObj.type === 'i-text') {
+      activeObj.set(key as any, val);
       fabricCanvas.renderAll();
       saveHistory(fabricCanvas);
     }
   };
 
+  // 縦書き横書き切り替え
   const toggleWritingMode = (mode: 'horizontal' | 'vertical') => {
     setWritingMode(mode);
     if (!fabricCanvas) return;
     const activeObj = fabricCanvas.getActiveObject() as any;
-    if (activeObj) {
-      const applyMode = (txtObj: any) => {
-        if (txtObj.type === 'i-text') {
-          txtObj.set({ splitByGrapheme: mode === 'vertical' });
-        }
-      };
-
-      if (activeObj.type === 'activeSelection') {
-        activeObj.getObjects().forEach(applyMode);
+    if (activeObj && activeObj.type === 'i-text') {
+      if (mode === 'vertical') {
+        activeObj.set({
+          splitByGrapheme: true,
+        });
       } else {
-        applyMode(activeObj);
+        activeObj.set({
+          splitByGrapheme: false,
+        });
       }
       fabricCanvas.renderAll();
       saveHistory(fabricCanvas);
@@ -1192,20 +1142,14 @@ export default function App() {
     setFontFamily(family);
     if (!fabricCanvas) return;
     const activeObj = fabricCanvas.getActiveObject();
-    if (activeObj) {
-      if (activeObj.type === 'i-text') {
-        (activeObj as fabric.IText).set('fontFamily', family);
-      } else if (activeObj.type === 'activeSelection') {
-        (activeObj as fabric.ActiveSelection).getObjects().forEach((o) => {
-          if (o.type === 'i-text') (o as fabric.IText).set('fontFamily', family);
-        });
-      }
+    if (activeObj && activeObj.type === 'i-text') {
+      (activeObj as fabric.IText).set('fontFamily', family);
       fabricCanvas.renderAll();
       saveHistory(fabricCanvas);
     }
   };
 
-  // モノクロ＆網点フィルタの適用
+  // 2階調モノクロ ＆ トーン・網点処理（Halftone）フィルタの適用
   const applyMonochromeFilter = (
     imgElement: HTMLImageElement,
     threshValue: number,
@@ -1237,6 +1181,7 @@ export default function App() {
       const imgData = ctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
       const data = imgData.data;
 
+      // 通常の2階調化
       if (!dotSize || dotSize <= 1) {
         for (let i = 0; i < data.length; i += 4) {
           const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
@@ -1251,6 +1196,7 @@ export default function App() {
         }
         ctx.putImageData(imgData, 0, 0);
       } else {
+        // ハーフトーン（網点/ドット）スクリーニング処理
         ctx.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
         ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
 
@@ -1352,6 +1298,7 @@ export default function App() {
     }
   };
 
+  // ハーフトーン更新処理
   const updateHalftoneSettings = (enabled: boolean, size: number, shape: 'dot' | 'line') => {
     setHalftoneEnabled(enabled);
     setHalftoneDotSize(size);
@@ -1381,6 +1328,7 @@ export default function App() {
     }
   };
 
+  // JSON保存
   const saveProjectAsJson = () => {
     if (!fabricCanvas) return;
 
@@ -1406,7 +1354,6 @@ export default function App() {
       '_halftoneShape',
       '_isGuideLine',
       '_isGridLine',
-      'visible',
     ]);
 
     const projectData = {
@@ -1427,6 +1374,7 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  // JSON読み込み
   const loadProjectFromJson = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !fabricCanvas) return;
@@ -1520,6 +1468,7 @@ export default function App() {
     e.target.value = '';
   };
 
+  // ドラッグ＆ドロップ処理
   const handleDragStart = (e: React.DragEvent<HTMLDivElement>, index: number) => {
     setDraggedIndex(index);
     e.dataTransfer.effectAllowed = 'move';
@@ -1550,26 +1499,19 @@ export default function App() {
     if (fromIndex === null || !fabricCanvas || fromIndex === dropIndex) return;
 
     const draggedObj = objectsList[fromIndex] as any;
-    const targetObj = objectsList[dropIndex];
+    const targetObj = objectsList[dropIndex] as any;
 
     if (draggedObj.type === 'image' && (targetObj.type === 'rect' || targetObj.type === 'circle')) {
       createMaskGroup(draggedObj, targetObj);
       setHasMask(true);
     } else {
-      const currentCanvasObjs = fabricCanvas.getObjects().filter((o) => !(o as any)._isGuideLine && !(o as any)._isGridLine);
-      const realFromIdx = currentCanvasObjs.indexOf(draggedObj);
-      const realTargetIdx = currentCanvasObjs.indexOf(targetObj);
-
-      if (realFromIdx !== -1 && realTargetIdx !== -1) {
-        fabricCanvas.moveObjectTo(draggedObj, realTargetIdx);
-      }
-      fabricCanvas.renderAll();
-      saveHistory(fabricCanvas);
+      createGroupFromObjects(draggedObj, targetObj);
     }
 
     refreshObjectsList(fabricCanvas);
   };
 
+  // レイヤー順序操作（最前面・前面・背面・最背面・並べ替え）
   const moveLayerOrder = (action: 'bringToFront' | 'bringForward' | 'sendBackwards' | 'sendToBack') => {
     if (!fabricCanvas || !activeObject) return;
 
@@ -1610,6 +1552,7 @@ export default function App() {
     }
   };
 
+  // レイヤー名変更
   const renameLayer = (obj: any, e: React.MouseEvent) => {
     e.stopPropagation();
     const currentName = obj._customName || '';
@@ -1622,8 +1565,9 @@ export default function App() {
     }
   };
 
+  // レイヤー一覧クリック（Shiftキーによる複数選択サポート）
   const handleLayerClick = (obj: fabric.Object, e: React.MouseEvent) => {
-    if (!fabricCanvas || !obj.visible) return;
+    if (!fabricCanvas) return;
 
     if (e.shiftKey) {
       const activeObj = fabricCanvas.getActiveObject();
@@ -1654,6 +1598,7 @@ export default function App() {
     fabricCanvas.renderAll();
   };
 
+  // オブジェクトの削除（指定引数がない場合は選択中要素を削除）
   const deleteSelected = (targetObj?: fabric.Object) => {
     if (!fabricCanvas) return;
     if (targetObj) {
@@ -1670,6 +1615,7 @@ export default function App() {
     saveHistory(fabricCanvas);
   };
 
+  // 画像保存（透過PNG／背景カラー付き保存の切り替え）
   const exportImage = (isTransparent: boolean) => {
     if (!fabricCanvas) return;
 
@@ -1856,7 +1802,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* スタンプ・素材ライブラリ */}
+        {/* スタンプ・素材ライブラリ (追加機能) */}
         <div style={{ backgroundColor: '#fffbebfb', padding: '10px', borderRadius: '8px', border: '1px solid #fef3c7' }}>
           <label style={{ ...labelStyle, color: '#92400e', marginBottom: '6px' }}>🎨 スタンプ・素材ライブラリ</label>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -1892,7 +1838,7 @@ export default function App() {
         <div style={{ backgroundColor: '#f9fafb', padding: '10px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
           <label style={{ ...labelStyle, marginBottom: '6px' }}>4. 選択中パーツの編集</label>
 
-          {/* 図形の自由変形 (Skew) */}
+          {/* 図形の自由変形 (Skew) (追加機能) */}
           <div style={{ marginBottom: '10px', borderTop: '1px dashed #d1d5db', paddingTop: '6px' }}>
             <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>自由変形 (歪み・斜体)</span>
             <div style={{ display: 'flex', gap: '8px' }}>
@@ -2012,7 +1958,7 @@ export default function App() {
             </div>
           )}
 
-          {/* 図形塗りつぶし設定 */}
+          {/* 四角枠・丸枠の塗りつぶし設定 */}
           {(selectedObjectType === 'rect' || selectedObjectType === 'circle' || selectedObjectType === 'path') && (
             <div style={{ marginBottom: '8px', borderTop: '1px dashed #d1d5db', paddingTop: '6px' }}>
               <span style={{ fontSize: '11px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>図形の中の塗りつぶし</span>
@@ -2073,7 +2019,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* フォント設定・文字サイズ・テキスト装飾 */}
+          {/* フォント設定・テキスト装飾 */}
           <div style={{ marginBottom: '8px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
               <span style={{ fontSize: '11px', color: '#6b7280' }}>フォント・文字サイズ</span>
@@ -2107,127 +2053,125 @@ export default function App() {
             </div>
 
             {/* テキスト専用コントロール */}
-            {(selectedObjectType === 'i-text' || (activeObject && activeObject.type === 'activeSelection')) && (
-              <div style={{ borderTop: '1px dashed #d1d5db', paddingTop: '6px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <div style={{ display: 'flex', gap: '4px' }}>
+            <div style={{ borderTop: '1px dashed #d1d5db', paddingTop: '6px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <div style={{ display: 'flex', gap: '4px' }}>
+                <button
+                  onClick={() => toggleWritingMode('horizontal')}
+                  style={{
+                    flex: 1,
+                    padding: '4px',
+                    fontSize: '11px',
+                    borderRadius: '4px',
+                    border: '1px solid #d1d5db',
+                    backgroundColor: writingMode === 'horizontal' ? '#000' : '#fff',
+                    color: writingMode === 'horizontal' ? '#fff' : '#000',
+                    cursor: 'pointer',
+                  }}
+                >
+                  横書き
+                </button>
+                <button
+                  onClick={() => toggleWritingMode('vertical')}
+                  style={{
+                    flex: 1,
+                    padding: '4px',
+                    fontSize: '11px',
+                    borderRadius: '4px',
+                    border: '1px solid #d1d5db',
+                    backgroundColor: writingMode === 'vertical' ? '#000' : '#fff',
+                    color: writingMode === 'vertical' ? '#fff' : '#000',
+                    cursor: 'pointer',
+                  }}
+                >
+                  縦書き
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                <span style={{ fontSize: '10px', color: '#6b7280' }}>揃え:</span>
+                {(['left', 'center', 'right'] as const).map((align) => (
                   <button
-                    onClick={() => toggleWritingMode('horizontal')}
+                    key={align}
+                    onClick={() => {
+                      setTextAlign(align);
+                      updateTextProp('textAlign', align);
+                    }}
                     style={{
                       flex: 1,
-                      padding: '4px',
-                      fontSize: '11px',
+                      padding: '2px',
+                      fontSize: '10px',
                       borderRadius: '4px',
                       border: '1px solid #d1d5db',
-                      backgroundColor: writingMode === 'horizontal' ? '#000' : '#fff',
-                      color: writingMode === 'horizontal' ? '#fff' : '#000',
+                      backgroundColor: textAlign === align ? '#000' : '#fff',
+                      color: textAlign === align ? '#fff' : '#000',
                       cursor: 'pointer',
                     }}
                   >
-                    横書き
+                    {align === 'left' ? '左' : align === 'center' ? '中央' : '右'}
                   </button>
-                  <button
-                    onClick={() => toggleWritingMode('vertical')}
-                    style={{
-                      flex: 1,
-                      padding: '4px',
-                      fontSize: '11px',
-                      borderRadius: '4px',
-                      border: '1px solid #d1d5db',
-                      backgroundColor: writingMode === 'vertical' ? '#000' : '#fff',
-                      color: writingMode === 'vertical' ? '#fff' : '#000',
-                      cursor: 'pointer',
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <div style={{ flex: 1 }}>
+                  <span style={{ fontSize: '10px', color: '#6b7280', display: 'block' }}>文字間隔</span>
+                  <input
+                    type="number"
+                    value={charSpacing}
+                    step="10"
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setCharSpacing(val);
+                      updateTextProp('charSpacing', val);
                     }}
-                  >
-                    縦書き
-                  </button>
+                    style={{ width: '100%', padding: '2px 4px', fontSize: '11px', borderRadius: '4px', border: '1px solid #d1d5db' }}
+                  />
                 </div>
-
-                <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                  <span style={{ fontSize: '10px', color: '#6b7280' }}>揃え:</span>
-                  {(['left', 'center', 'right'] as const).map((align) => (
-                    <button
-                      key={align}
-                      onClick={() => {
-                        setTextAlign(align);
-                        updateTextProp('textAlign', align);
-                      }}
-                      style={{
-                        flex: 1,
-                        padding: '2px',
-                        fontSize: '10px',
-                        borderRadius: '4px',
-                        border: '1px solid #d1d5db',
-                        backgroundColor: textAlign === align ? '#000' : '#fff',
-                        color: textAlign === align ? '#fff' : '#000',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      {align === 'left' ? '左' : align === 'center' ? '中央' : '右'}
-                    </button>
-                  ))}
-                </div>
-
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <div style={{ flex: 1 }}>
-                    <span style={{ fontSize: '10px', color: '#6b7280', display: 'block' }}>文字間隔</span>
-                    <input
-                      type="number"
-                      value={charSpacing}
-                      step="10"
-                      onChange={(e) => {
-                        const val = Number(e.target.value);
-                        setCharSpacing(val);
-                        updateTextProp('charSpacing', val);
-                      }}
-                      style={{ width: '100%', padding: '2px 4px', fontSize: '11px', borderRadius: '4px', border: '1px solid #d1d5db' }}
-                    />
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <span style={{ fontSize: '10px', color: '#6b7280', display: 'block' }}>行間</span>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={lineHeight}
-                      onChange={(e) => {
-                        const val = Number(e.target.value);
-                        setLineHeight(val);
-                        updateTextProp('lineHeight', val);
-                      }}
-                      style={{ width: '100%', padding: '2px 4px', fontSize: '11px', borderRadius: '4px', border: '1px solid #d1d5db' }}
-                    />
-                  </div>
-                </div>
-
-                <div style={{ borderTop: '1px dashed #e5e7eb', paddingTop: '4px' }}>
-                  <span style={{ fontSize: '10px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>袋文字（縁取り）設定</span>
-                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                    <input
-                      type="color"
-                      value={textStrokeColor}
-                      onChange={(e) => {
-                        setTextStrokeColor(e.target.value);
-                        updateTextProp('stroke', e.target.value);
-                      }}
-                      style={{ width: '24px', height: '24px', border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
-                    />
-                    <span style={{ fontSize: '10px', color: '#6b7280' }}>太さ:</span>
-                    <input
-                      type="number"
-                      min="0"
-                      max="20"
-                      value={textStrokeWidth}
-                      onChange={(e) => {
-                        const val = Number(e.target.value);
-                        setTextStrokeWidth(val);
-                        updateTextProp('strokeWidth', val);
-                      }}
-                      style={{ width: '50px', padding: '2px 4px', fontSize: '11px', borderRadius: '4px', border: '1px solid #d1d5db' }}
-                    />
-                    <span style={{ fontSize: '10px', color: '#6b7280' }}>px</span>
-                  </div>
+                <div style={{ flex: 1 }}>
+                  <span style={{ fontSize: '10px', color: '#6b7280', display: 'block' }}>行間</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={lineHeight}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setLineHeight(val);
+                      updateTextProp('lineHeight', val);
+                    }}
+                    style={{ width: '100%', padding: '2px 4px', fontSize: '11px', borderRadius: '4px', border: '1px solid #d1d5db' }}
+                  />
                 </div>
               </div>
-            )}
+
+              <div style={{ borderTop: '1px dashed #e5e7eb', paddingTop: '4px' }}>
+                <span style={{ fontSize: '10px', color: '#6b7280', display: 'block', marginBottom: '2px' }}>袋文字（縁取り）設定</span>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <input
+                    type="color"
+                    value={textStrokeColor}
+                    onChange={(e) => {
+                      setTextStrokeColor(e.target.value);
+                      updateTextProp('stroke', e.target.value);
+                    }}
+                    style={{ width: '24px', height: '24px', border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
+                  />
+                  <span style={{ fontSize: '10px', color: '#6b7280' }}>太さ:</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="20"
+                    value={textStrokeWidth}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setTextStrokeWidth(val);
+                      updateTextProp('strokeWidth', val);
+                    }}
+                    style={{ width: '50px', padding: '2px 4px', fontSize: '11px', borderRadius: '4px', border: '1px solid #d1d5db' }}
+                  />
+                  <span style={{ fontSize: '10px', color: '#6b7280' }}>px</span>
+                </div>
+              </div>
+            </div>
           </div>
 
           {(selectedObjectType === 'image' || hasMask || isEditingMaskMode) && (
@@ -2244,7 +2188,7 @@ export default function App() {
                 />
               </div>
 
-              {/* トーン・網点処理 (Halftone) パネル */}
+              {/* トーン・網点処理 (Halftone) パネル (追加機能) */}
               <div style={{ backgroundColor: '#ffffff', padding: '8px', borderRadius: '6px', border: '1px solid #d1d5db' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer', marginBottom: '4px' }}>
                   <input
@@ -2366,23 +2310,20 @@ export default function App() {
       <div style={{ width: '280px', backgroundColor: '#ffffff', borderLeft: '1px solid #e5e7eb', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px', boxSizing: 'border-box' }}>
         <h2 style={{ fontSize: '14px', fontWeight: 'bold', margin: '0', color: '#111827' }}>レイヤー一覧</h2>
 
-        {/* 汎用グループ化 / 解除ボタン (右ナビへ移動) */}
-        <div style={{ display: 'flex', gap: '6px' }}>
-          <button onClick={createGeneralGroup} style={{ ...btnStyle, flex: 1, fontSize: '11px', textAlign: 'center', backgroundColor: '#f3f4f6' }}>
-            📦 グループ化
-          </button>
-          <button onClick={ungroupGeneralGroup} style={{ ...btnStyle, flex: 1, fontSize: '11px', textAlign: 'center', backgroundColor: '#f3f4f6' }}>
-            🔓 グループ解除
-          </button>
-        </div>
-
-        {/* レイヤーの重なり位置操作ボタン */}
+        {/* レイヤーの重なり位置操作 ＆ グループ解除ボタン */}
         {activeObject && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px', backgroundColor: '#f8fafc', padding: '6px', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
-            <button onClick={() => moveLayerOrder('bringToFront')} style={layerOrderBtnStyle}>🔝 最前面へ</button>
-            <button onClick={() => moveLayerOrder('bringForward')} style={layerOrderBtnStyle}>⬆ 前面へ</button>
-            <button onClick={() => moveLayerOrder('sendBackwards')} style={layerOrderBtnStyle}>⬇ 背面へ</button>
-            <button onClick={() => moveLayerOrder('sendToBack')} style={layerOrderBtnStyle}>🔝 最背面へ</button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', backgroundColor: '#f8fafc', padding: '6px', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px' }}>
+              <button onClick={() => moveLayerOrder('bringToFront')} style={layerOrderBtnStyle}>🔝 最前面へ</button>
+              <button onClick={() => moveLayerOrder('bringForward')} style={layerOrderBtnStyle}>⬆ 前面へ</button>
+              <button onClick={() => moveLayerOrder('sendBackwards')} style={layerOrderBtnStyle}>⬇ 背面へ</button>
+              <button onClick={() => moveLayerOrder('sendToBack')} style={layerOrderBtnStyle}>🔝 最背面へ</button>
+            </div>
+            {((activeObject as any).type === 'group' || (activeObject as any)._isGeneralGroup) && !(activeObject as any)._isMaskGroup && (
+              <button onClick={ungroupGeneralGroup} style={{ ...btnStyle, fontSize: '11px', textAlign: 'center', backgroundColor: '#ffffff', borderColor: '#cbd5e1' }}>
+                🔓 グループ解除
+              </button>
+            )}
           </div>
         )}
 
@@ -2394,111 +2335,118 @@ export default function App() {
               const isSelected = isObjectInSelection(obj);
               const isDragging = draggedIndex === index;
               const isTargeted = dragOverIndex === index;
-              const isGroup = obj.type === 'group' || obj._isGeneralGroup || obj._isMaskGroup;
-              const childObjects = isGroup && typeof obj.getObjects === 'function' ? obj.getObjects() : [];
 
               return (
                 <div
                   key={index}
-                  style={{ display: 'flex', flexDirection: 'column' }}
-                  draggable
-                  onDragStart={(e) => handleDragStart(e, index)}
-                  onDragOver={(e) => handleDragOver(e, index)}
-                  onDragEnd={handleDragEnd}
-                  onDrop={(e) => handleDrop(e, index)}
+                  style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}
                 >
                   <div
+                    draggable={true}
+                    onDragStart={(e) => handleDragStart(e, index)}
+                    onDragOver={(e) => handleDragOver(e, index)}
+                    onDragLeave={() => setDragOverIndex(null)}
+                    onDragEnd={handleDragEnd}
+                    onDrop={(e) => handleDrop(e, index)}
                     onClick={(e) => handleLayerClick(obj, e)}
                     style={{
+                      padding: '6px 8px',
+                      fontSize: '12px',
+                      borderRadius: '6px',
+                      border: '2px dashed',
+                      borderColor: isTargeted ? '#2563eb' : isSelected ? '#000000' : '#e5e7eb',
+                      backgroundColor: isTargeted ? '#eff6ff' : isSelected ? '#f3f4f6' : '#ffffff',
+                      opacity: isDragging ? 0.4 : 1,
+                      fontWeight: isSelected ? 'bold' : 'normal',
+                      cursor: 'grab',
                       display: 'flex',
                       alignItems: 'center',
-                      justify: 'space-between',
-                      padding: '8px',
-                      borderRadius: '6px',
-                      border: isSelected ? '2px solid #2563eb' : isTargeted ? '2px dashed #3b82f6' : '1px solid #e5e7eb',
-                      backgroundColor: isSelected ? '#eff6ff' : isDragging ? '#f3f4f6' : '#ffffff',
-                      cursor: 'pointer',
-                      opacity: obj.visible ? (isDragging ? 0.4 : 1) : 0.5,
+                      justifyContent: 'space-between',
+                      gap: '4px',
                       userSelect: 'none',
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1, overflow: 'hidden' }}>
-                      {/* 表示 / 非表示 切替ボタン */}
-                      <button
-                        onClick={(e) => toggleVisibility(obj, e)}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '12px' }}
-                        title={obj.visible ? '非表示にする' : '表示する'}
-                      >
-                        {obj.visible ? '👁' : '🙈'}
-                      </button>
-
-                      <span style={{ fontSize: '12px', fontWeight: isSelected ? 'bold' : 'normal', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {/* レイヤー名 ＆ 名前編集ボタン */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', overflow: 'hidden', flex: 1 }}>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {getObjectLabel(obj)}
                       </span>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-                      {/* 複製ボタン */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          duplicateObject(obj);
-                        }}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', padding: '2px 4px' }}
-                        title="レイヤーを複製"
-                      >
-                        📋
-                      </button>
                       <button
                         onClick={(e) => renameLayer(obj, e)}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', padding: '2px 4px' }}
-                        title="名前を変更"
+                        style={{
+                          border: 'none',
+                          background: 'none',
+                          cursor: 'pointer',
+                          padding: '0 2px',
+                          fontSize: '11px',
+                          opacity: 0.6,
+                        }}
+                        title="レイヤー名を変更"
                       >
                         ✏️
                       </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          moveLayer(index, 'up');
-                        }}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '10px', padding: '2px' }}
-                        title="上へ移動"
-                      >
-                        ▲
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          moveLayer(index, 'down');
-                        }}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '10px', padding: '2px' }}
-                        title="下へ移動"
-                      >
-                        ▼
-                      </button>
+                    </div>
+
+                    {/* レイヤー削除ボタン ＆ 順序変更ボタン */}
+                    <div style={{ display: 'flex', gap: '3px', alignItems: 'center' }}>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           deleteSelected(obj);
                         }}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', padding: '2px 4px', color: '#dc2626' }}
-                        title="削除"
+                        style={{
+                          border: '1px solid #fca5a5',
+                          backgroundColor: '#fef2f2',
+                          color: '#dc2626',
+                          borderRadius: '3px',
+                          padding: '2px 4px',
+                          fontSize: '10px',
+                          cursor: 'pointer',
+                        }}
+                        title="このレイヤーを削除"
                       >
-                        ✕
+                        🗑
+                      </button>
+                      <button
+                        disabled={index === 0}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          moveLayer(index, 'up');
+                        }}
+                        style={{
+                          border: '1px solid #d1d5db',
+                          backgroundColor: index === 0 ? '#f3f4f6' : '#ffffff',
+                          color: index === 0 ? '#9ca3af' : '#374151',
+                          borderRadius: '3px',
+                          padding: '2px 4px',
+                          fontSize: '10px',
+                          cursor: index === 0 ? 'default' : 'pointer',
+                        }}
+                        title="前（上）に移動"
+                      >
+                        ▲
+                      </button>
+                      <button
+                        disabled={index === objectsList.length - 1}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          moveLayer(index, 'down');
+                        }}
+                        style={{
+                          border: '1px solid #d1d5db',
+                          backgroundColor: index === objectsList.length - 1 ? '#f3f4f6' : '#ffffff',
+                          color: index === objectsList.length - 1 ? '#9ca3af' : '#374151',
+                          borderRadius: '3px',
+                          padding: '2px 4px',
+                          fontSize: '10px',
+                          cursor: index === objectsList.length - 1 ? 'default' : 'pointer',
+                        }}
+                        title="後（下）に移動"
+                      >
+                        ▼
                       </button>
                     </div>
                   </div>
-
-                  {/* グループ内要素の子要素ツリー表示 */}
-                  {isGroup && childObjects.length > 0 && (
-                    <div style={{ marginLeft: '16px', borderLeft: '2px solid #cbd5e1', paddingLeft: '6px', marginTop: '2px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                      {childObjects.map((child: any, cIdx: number) => (
-                        <div key={cIdx} style={{ fontSize: '10px', color: '#64748b', padding: '2px 0' }}>
-                          └ {getObjectLabel(child)}
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
               );
             })
