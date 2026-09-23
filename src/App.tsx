@@ -1,4 +1,3 @@
-TypeScript
 import React, { useEffect, useRef, useState } from 'react';
 import * as fabric from 'fabric';
 
@@ -990,7 +989,7 @@ export default function App() {
       const textbox = new fabric.Textbox('ここに本文の段落テキストを入力します。長文の文章も自動で折り返されて段落ブロックとして編集できます。', {
         left: 50,
         top: 50,
-        width: 80,
+        width: 180,
         fontFamily: fontFamily,
         fontSize: 14,
         fill: activeInkColor,
@@ -2405,194 +2404,153 @@ export default function App() {
           <span style={{ fontSize: '12px', fontWeight: 'bold', color: '#4b5563' }}>表示倍率:</span>
           <button
             onClick={() => setZoomScale((prev) => Math.max(0.2, prev - 0.1))}
-            style={{ ...btnStyle, padding: '2px 8px', fontWeight: 'bold' }}
-            title="縮小"
+            style={{ ...btnStyle, padding: '2px 8px' }}
           >
             －
           </button>
-          <span style={{ fontSize: '12px', fontWeight: 'bold', minWidth: '45px', textAlign: 'center' }}>
-            {Math.round(zoomScale * 100)}%
-          </span>
+          <span style={{ fontSize: '12px', minWidth: '45px', textAlign: 'center' }}>{Math.round(zoomScale * 100)}%</span>
           <button
-            onClick={() => setZoomScale((prev) => Math.min(3.0, prev + 0.1))}
-            style={{ ...btnStyle, padding: '2px 8px', fontWeight: 'bold' }}
-            title="拡大"
+            onClick={() => setZoomScale((prev) => Math.min(2.0, prev + 0.1))}
+            style={{ ...btnStyle, padding: '2px 8px' }}
           >
             ＋
           </button>
           <button
             onClick={() => setZoomScale(1.0)}
-            style={{ ...btnStyle, padding: '2px 8px', fontSize: '11px' }}
+            style={{ ...btnStyle, padding: '2px 8px', fontSize: '10px' }}
           >
-            100%
+            リセット
           </button>
         </div>
 
-        {/* スクロール可能なキャンバスコンテナ */}
-        <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px' }}>
+        {/* 描画エリア */}
+        <div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'auto', padding: '20px' }}>
           <div
             style={{
               transform: `scale(${zoomScale})`,
               transformOrigin: 'center center',
               transition: 'transform 0.1s ease-out',
-              boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
+              boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
             }}
           >
             <canvas ref={canvasRef} />
           </div>
         </div>
-
-        {/* マージン表示ガイドのオーバーレイ（表示時のみ） */}
-        {marginGuides && (
-          <div style={{ position: 'absolute', bottom: '12px', left: '50%', transform: 'translateX(-50%)', backgroundColor: 'rgba(15, 23, 42, 0.85)', color: '#ffffff', padding: '4px 12px', borderRadius: '20px', fontSize: '11px', display: 'flex', gap: '12px', pointerEvents: 'none', zIndex: 10 }}>
-            <span>上: {marginGuides.top}px</span>
-            <span>下: {marginGuides.bottom}px</span>
-            <span>左: {marginGuides.left}px</span>
-            <span>右: {marginGuides.right}px</span>
-          </div>
-        )}
       </div>
 
-      {/* 右ナビ：レイヤー一覧・操作パネル */}
+      {/* 右レイヤー管理パネル */}
       <div style={{ width: '280px', backgroundColor: '#ffffff', borderLeft: '1px solid #e5e7eb', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', boxSizing: 'border-box', overflowY: 'auto', flexShrink: 0 }}>
-        <h2 style={{ fontSize: '14px', fontWeight: 'bold', margin: '0', color: '#111827', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>レイヤー・重ね順</span>
-          <span style={{ fontSize: '11px', fontWeight: 'normal', color: '#6b7280' }}>全 {objectsList.length} 件</span>
-        </h2>
+        <h2 style={{ fontSize: '14px', fontWeight: 'bold', margin: '0', color: '#111827' }}>レイヤー一覧・操作</h2>
 
-        {/* 重ね順変更ボタン */}
+        {/* 順序変更・グループ化ボタン */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px' }}>
-          <button onClick={() => moveLayerOrder('bringToFront')} disabled={!activeObject} style={layerOrderBtnStyle}>
-            ⬆ 最前面へ
-          </button>
-          <button onClick={() => moveLayerOrder('sendToBack')} disabled={!activeObject} style={layerOrderBtnStyle}>
-            ⬇ 最背面へ
-          </button>
-          <button onClick={() => moveLayerOrder('bringForward')} disabled={!activeObject} style={layerOrderBtnStyle}>
-            ▲ 前面へ
-          </button>
-          <button onClick={() => moveLayerOrder('sendBackwards')} disabled={!activeObject} style={layerOrderBtnStyle}>
-            ▼ 背面へ
-          </button>
+          <button onClick={() => moveLayerOrder('bringToFront')} style={layerOrderBtnStyle}>最前面へ</button>
+          <button onClick={() => moveLayerOrder('bringForward')} style={layerOrderBtnStyle}>前面へ</button>
+          <button onClick={() => moveLayerOrder('sendBackwards')} style={layerOrderBtnStyle}>背面へ</button>
+          <button onClick={() => moveLayerOrder('sendToBack')} style={layerOrderBtnStyle}>最背面へ</button>
         </div>
 
-        {/* グループ化・グループ解除 */}
         <div style={{ display: 'flex', gap: '4px' }}>
-          <button onClick={ungroupGeneralGroup} disabled={!activeObject || (!activeObject.type?.includes('group') && !(activeObject as any)._isMaskGroup)} style={{ ...layerOrderBtnStyle, flex: 1, backgroundColor: '#f8fafc' }}>
-            🔓 グループ/マスク解除
-          </button>
+          <button onClick={ungroupGeneralGroup} style={{ ...layerOrderBtnStyle, flex: 1 }}>グループ解除</button>
+          <button onClick={() => duplicateSelectedLayer()} style={{ ...layerOrderBtnStyle, flex: 1 }}>レイヤー複製</button>
         </div>
 
-        {/* レイヤー一覧ツリー */}
-        <div style={{ flex: 1, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '4px', backgroundColor: '#f8fafc', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        {/* レイヤーリスト */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '8px' }}>
           {objectsList.length === 0 ? (
-            <div style={{ padding: '12px', textAlign: 'center', fontSize: '11px', color: '#94a3b8' }}>
-              配置されているパーツはありません
+            <div style={{ fontSize: '12px', color: '#9ca3af', textAlign: 'center', padding: '20px 0' }}>
+              パーツがありません
             </div>
           ) : (
-            objectsList.map((obj: any, idx: number) => {
-              const isSelected = isObjectInSelection(obj);
-              const isGroup = obj.type === 'group' || obj._isGeneralGroup || obj._isMaskGroup;
-              const childObjects = isGroup && obj.getObjects ? obj.getObjects() : [];
-              const isExpanded = !!expandedGroups[idx];
-              const isDragged = draggedIndex === idx;
-              const isDragOver = dragOverIndex === idx;
+            objectsList.map((obj, index) => {
+              const selected = isObjectInSelection(obj);
+              const isGroup = obj.type === 'group' || (obj as any)._isGeneralGroup || (obj as any)._isMaskGroup;
+              const subObjects = isGroup && (obj as fabric.Group).getObjects ? (obj as fabric.Group).getObjects() : [];
 
               return (
-                <div key={`layer_${idx}`} style={{ display: 'flex', flexDirection: 'column' }}>
+                <div key={index} style={{ display: 'flex', flexDirection: 'column' }}>
                   <div
                     draggable
-                    onDragStart={(e) => handleDragStart(e, idx)}
-                    onDragOver={(e) => handleDragOver(e, idx)}
+                    onDragStart={(e) => handleDragStart(e, index)}
+                    onDragOver={(e) => handleDragOver(e, index)}
                     onDragEnd={handleDragEnd}
-                    onDrop={(e) => handleDrop(e, idx)}
+                    onDrop={(e) => handleDrop(e, index)}
                     onClick={(e) => handleLayerClick(obj, e)}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
+                      justify: 'space-between',
                       padding: '6px 8px',
-                      borderRadius: '4px',
-                      fontSize: '11px',
-                      backgroundColor: isSelected ? '#3b82f6' : isDragged ? '#e2e8f0' : isDragOver ? '#bfdbfe' : '#ffffff',
-                      color: isSelected ? '#ffffff' : '#334155',
-                      border: isDragOver ? '2px dashed #2563eb' : '1px solid #e2e8f0',
-                      cursor: 'grab',
-                      userSelect: 'none',
-                      gap: '6px',
+                      borderRadius: '6px',
+                      border: selected ? '2px solid #2563eb' : dragOverIndex === index ? '2px dashed #2563eb' : '1px solid #e5e7eb',
+                      backgroundColor: selected ? '#eff6ff' : '#ffffff',
+                      cursor: 'pointer',
+                      fontSize: '12px',
                     }}
                   >
-                    {/* 非表示/表示 */}
-                    <button
-                      onClick={(e) => toggleVisibility(obj, e)}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '12px', color: isSelected ? '#ffffff' : '#64748b' }}
-                      title={obj.visible ? '非表示にする' : '表示する'}
-                    >
-                      {obj.visible !== false ? '👁️' : '🙈'}
-                    </button>
-
-                    {/* グループ展開矢印 */}
-                    {isGroup && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}>
+                      <span style={{ color: '#9ca3af', cursor: 'grab', fontSize: '10px' }}>⋮⋮</span>
                       <button
-                        onClick={(e) => toggleGroupExpand(idx, e)}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '10px', color: isSelected ? '#ffffff' : '#64748b' }}
+                        onClick={(e) => toggleVisibility(obj, e)}
+                        style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 0, fontSize: '12px' }}
                       >
-                        {isExpanded ? '▼' : '▶'}
+                        {obj.visible ? '👁️' : '🙈'}
                       </button>
-                    )}
+                      <span
+                        onDoubleClick={(e) => renameLayer(obj, e)}
+                        style={{
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          fontWeight: selected ? 'bold' : 'normal',
+                          color: selected ? '#1d4ed8' : '#374151',
+                        }}
+                      >
+                        {getObjectLabel(obj)}
+                      </span>
+                    </div>
 
-                    {/* レイヤー名 */}
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: isSelected ? 'bold' : 'normal' }}>
-                      {getObjectLabel(obj)}
-                    </span>
-
-                    {/* レイヤー操作メニュー */}
-                    <button
-                      onClick={(e) => renameLayer(obj, e)}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '10px', color: isSelected ? '#ffffff' : '#64748b' }}
-                      title="名前を変更"
-                    >
-                      ✏️
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        duplicateSelectedLayer(obj);
-                      }}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '10px', color: isSelected ? '#ffffff' : '#64748b' }}
-                      title="複製"
-                    >
-                      📋
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        deleteSelected(obj);
-                      }}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '10px', color: isSelected ? '#ffffff' : '#ef4444' }}
-                      title="削除"
-                    >
-                      🗑️
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      {isGroup && subObjects.length > 0 && (
+                        <button
+                          onClick={(e) => toggleGroupExpand(index, e)}
+                          style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '0 2px', fontSize: '10px', color: '#6b7280' }}
+                        >
+                          {expandedGroups[index] ? '▼' : '▶'}
+                        </button>
+                      )}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteSelected(obj);
+                        }}
+                        style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 0, fontSize: '12px', color: '#ef4444' }}
+                      >
+                        ✕
+                      </button>
+                    </div>
                   </div>
 
-                  {/* グループ内の展開要素 */}
-                  {isGroup && isExpanded && (
-                    <div style={{ marginLeft: '16px', paddingLeft: '8px', borderLeft: '2px solid #cbd5e1', display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '2px' }}>
-                      {childObjects.map((child: any, cIdx: number) => (
+                  {/* グループ内ツリー展開表示 */}
+                  {isGroup && expandedGroups[index] && subObjects.length > 0 && (
+                    <div style={{ marginLeft: '16px', paddingLeft: '8px', borderLeft: '2px solid #e2e8f0', marginTop: '2px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      {subObjects.map((subObj: any, subIdx: number) => (
                         <div
-                          key={`child_${idx}_${cIdx}`}
+                          key={subIdx}
                           style={{
-                            padding: '4px 6px',
-                            fontSize: '10px',
-                            backgroundColor: '#f1f5f9',
-                            borderRadius: '3px',
-                            color: '#475569',
                             display: 'flex',
-                            justify: 'space-between',
                             alignItems: 'center',
+                            justify: 'space-between',
+                            padding: '4px 6px',
+                            borderRadius: '4px',
+                            backgroundColor: '#f8fafc',
+                            fontSize: '11px',
+                            color: '#475569',
                           }}
                         >
-                          <span>{getObjectLabel(child)}</span>
+                          <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            └ {getObjectLabel(subObj)}
+                          </span>
                         </div>
                       ))}
                     </div>
