@@ -986,7 +986,7 @@ export default function App() {
       const textbox = new fabric.Textbox('ここに本文の段落テキストを入力します。長文の文章も自動で折り返されて段落ブロックとして編集できます。', {
         left: 50,
         top: 50,
-        width: 160,
+        width: 80,
         fontFamily: fontFamily,
         fontSize: 14,
         fill: activeInkColor,
@@ -2512,52 +2512,49 @@ export default function App() {
                   {/* グループ内部の個別レイヤー表示・個別操作機能 */}
                   {isGroup && isExpanded && (
                     <div style={{ marginLeft: '16px', marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '4px', borderLeft: '2px solid #e5e7eb', paddingLeft: '8px' }}>
-                      {groupChildren.map((child: any, cIdx: number) => (
-                        <div
-                          key={cIdx}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (fabricCanvas) {
-                              fabricCanvas.setActiveObject(child);
-                              fabricCanvas.renderAll();
-                            }
-                          }}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justify: 'space-between',
-                            padding: '4px 6px',
-                            borderRadius: '4px',
-                            backgroundColor: activeObject === child ? '#e0e7ff' : '#f8fafc',
-                            border: '1px solid #e2e8f0',
-                            cursor: 'pointer',
-                            fontSize: '11px',
-                          }}
-                        >
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#475569' }}>
-                            {getObjectLabel(child)}
-                          </span>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-                            <button
-                              onClick={(e) => toggleVisibility(child, e)}
-                              style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '1px', fontSize: '10px' }}
-                              title={child.visible ? '非表示にする' : '表示する'}
-                            >
-                              {child.visible !== false ? '👁️' : '🙈'}
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                deleteSelected(child);
-                              }}
-                              style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '1px', fontSize: '10px', color: '#ef4444' }}
-                              title="削除"
-                            >
-                              🗑️
-                            </button>
+                      {groupChildren.map((child: any, childIndex: number) => {
+                        const isChildSelected = activeObject === child;
+                        return (
+                          <div
+                            key={childIndex}
+                            onClick={(e) => handleLayerClick(child, e)}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justify: 'space-between',
+                              padding: '4px 6px',
+                              borderRadius: '4px',
+                              border: isChildSelected ? '1px solid #000000' : '1px solid #e2e8f0',
+                              backgroundColor: isChildSelected ? '#e2e8f0' : '#f8fafc',
+                              cursor: 'pointer',
+                              fontSize: '11px',
+                            }}
+                          >
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                              {getObjectLabel(child)}
+                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+                              <button
+                                onClick={(e) => toggleVisibility(child, e)}
+                                style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '2px', fontSize: '10px' }}
+                                title={child.visible ? '非表示にする' : '表示する'}
+                              >
+                                {child.visible !== false ? '👁️' : '🙈'}
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  deleteSelected(child);
+                                }}
+                                style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '2px', fontSize: '10px', color: '#ef4444' }}
+                                title="削除"
+                              >
+                                🗑️
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
