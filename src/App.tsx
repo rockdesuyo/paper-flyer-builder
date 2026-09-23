@@ -130,6 +130,8 @@ export default function App() {
 
   const [marginGuides, setMarginGuides] = useState<{ top: number; bottom: number; left: number; right: number } | null>(null);
 
+  const [zoomScale, setZoomScale] = useState<number>(1.0);
+
   const historyRef = useRef<string[]>([]);
   const isUndoRedoRef = useRef<boolean>(false);
   const isBatchLoadingRef = useRef<boolean>(false);
@@ -2395,172 +2397,68 @@ export default function App() {
       </div>
 
       {/* 中央キャンバスプレビュー */}
-      <div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', position: 'relative', overflow: 'auto', padding: '20px' }}>
-        <div style={{ boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)', borderRadius: '4px', overflow: 'hidden' }}>
-          <canvas ref={canvasRef} />
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative', overflow: 'auto', padding: '20px' }}>
+        {/* 拡大・縮小 コントロールバー */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            backgroundColor: '#ffffff',
+            padding: '6px 12px',
+            borderRadius: '20px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+            marginBottom: '16px',
+            zIndex: 10,
+          }}
+        >
+          <span style={{ fontSize: '12px', fontWeight: 'bold', color: '#4b5563', marginRight: '4px' }}>🔍 ズーム:</span>
+          <button
+            onClick={() => setZoomScale((prev) => Math.max(0.2, Number((prev - 0.1).toFixed(2))))}
+            style={{ ...btnStyle, padding: '2px 8px', fontSize: '12px', fontWeight: 'bold' }}
+            title="縮小"
+          >
+            －
+          </button>
+          {[0.5, 0.75, 1.0, 1.25, 1.5, 2.0].map((scale) => (
+            <button
+              key={scale}
+              onClick={() => setZoomScale(scale)}
+              style={{
+                ...btnStyle,
+                padding: '3px 8px',
+                fontSize: '11px',
+                backgroundColor: zoomScale === scale ? '#1e293b' : '#ffffff',
+                color: zoomScale === scale ? '#ffffff' : '#374151',
+                fontWeight: zoomScale === scale ? 'bold' : 'normal',
+                borderColor: zoomScale === scale ? '#1e293b' : '#d1d5db',
+              }}
+            >
+              {Math.round(scale * 100)}%
+            </button>
+          ))}
+          <button
+            onClick={() => setZoomScale((prev) => Math.min(3.0, Number((prev + 0.1).toFixed(2))))}
+            style={{ ...btnStyle, padding: '2px 8px', fontSize: '12px', fontWeight: 'bold' }}
+            title="拡大"
+          >
+            ＋
+          </button>
         </div>
-      </div>
 
-      {/* 右レイヤー管理パネル */}
-      <div style={{ width: '280px', backgroundColor: '#ffffff', borderLeft: '1px solid #e5e7eb', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', boxSizing: 'border-box', overflowY: 'auto' }}>
-        <h2 style={{ fontSize: '14px', fontWeight: 'bold', margin: '0', color: '#111827' }}>レイヤー一覧</h2>
-
-        {/* 選択オブジェクト操作ボタン */}
-        {activeObject && (
-          <div style={{ backgroundColor: '#f8fafc', padding: '8px', borderRadius: '6px', border: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <span style={{ fontSize: '10px', fontWeight: 'bold', color: '#475569' }}>順序 / グループ・複製</span>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '4px' }}>
-              <button onClick={() => moveLayerOrder('bringToFront')} style={layerOrderBtnStyle} title="最前面へ">最前面</button>
-              <button onClick={() => moveLayerOrder('bringForward')} style={layerOrderBtnStyle} title="前面へ">前面</button>
-              <button onClick={() => moveLayerOrder('sendBackwards')} style={layerOrderBtnStyle} title="背面へ">背面</button>
-              <button onClick={() => moveLayerOrder('sendToBack')} style={layerOrderBtnStyle} title="最背面へ">最背面</button>
-            </div>
-            <div style={{ display: 'flex', gap: '4px' }}>
-              <button onClick={() => duplicateSelectedLayer()} style={{ ...btnStyle, flex: 1, padding: '4px 6px', fontSize: '11px', textAlign: 'center' }}>
-                📋 複製
-              </button>
-              {((activeObject as any)._isGeneralGroup || (activeObject as any)._isMaskGroup || activeObject.type === 'group') && (
-                <button onClick={ungroupGeneralGroup} style={{ ...btnStyle, flex: 1, padding: '4px 6px', fontSize: '11px', textAlign: 'center', backgroundColor: '#fef2f2', borderColor: '#fca5a5', color: '#991b1b' }}>
-                  🔓 解除
-                </button>
-              )}
-            </div>
+        <div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', overflow: 'auto' }}>
+          <div
+            style={{
+              transform: `scale(${zoomScale})`,
+              transformOrigin: 'center center',
+              transition: 'transform 0.15s ease-out',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+              borderRadius: '4px',
+              overflow: 'hidden',
+            }}
+          >
+            <canvas ref={canvasRef} />
           </div>
-        )}
-
-        <p style={{ fontSize: '11px', color: '#6b7280', margin: 0 }}>
-          💡 重ね順の変更はドラッグ＆ドロップでも行えます。画像を枠の上に落とすとマスクが作成されます。 Shift+クリックで複数選択。
-        </p>
-
-        {/* レイヤーリスト（アコーディオン表示＆直接選択機能） */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: 1, overflowY: 'auto' }}>
-          {objectsList.length === 0 ? (
-            <div style={{ fontSize: '12px', color: '#9ca3af', textAlign: 'center', marginTop: '20px' }}>
-              パーツがありません
-            </div>
-          ) : (
-            objectsList.map((obj: any, index) => {
-              const isSelected = isObjectInSelection(obj);
-              const isGroup = obj._isGeneralGroup || obj._isMaskGroup || obj.type === 'group';
-              const isExpanded = !!expandedGroups[index];
-              const groupChildren = isGroup && obj.getObjects ? obj.getObjects() : [];
-
-              return (
-                <div key={index} style={{ display: 'flex', flexDirection: 'column' }}>
-                  <div
-                    draggable
-                    onDragStart={(e) => handleDragStart(e, index)}
-                    onDragOver={(e) => handleDragOver(e, index)}
-                    onDragEnd={handleDragEnd}
-                    onDrop={(e) => handleDrop(e, index)}
-                    onClick={(e) => handleLayerClick(obj, e)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justify: 'space-between',
-                      padding: '8px',
-                      borderRadius: '6px',
-                      border: dragOverIndex === index ? '2px solid #2563eb' : isSelected ? '2px solid #000000' : '1px solid #d1d5db',
-                      backgroundColor: isSelected ? '#f3f4f6' : '#ffffff',
-                      cursor: 'grab',
-                      fontSize: '12px',
-                      userSelect: 'none',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden', flex: 1 }}>
-                      {isGroup && (
-                        <button
-                          onClick={(e) => toggleGroupExpand(index, e)}
-                          style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 0, fontSize: '10px', color: '#6b7280' }}
-                        >
-                          {isExpanded ? '▼' : '▶'}
-                        </button>
-                      )}
-                      <span style={{ fontWeight: isSelected ? 'bold' : 'normal', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                        {getObjectLabel(obj)}
-                      </span>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <button
-                        onClick={(e) => renameLayer(obj, e)}
-                        style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '2px', fontSize: '12px' }}
-                        title="名前変更"
-                      >
-                        ✏️
-                      </button>
-                      <button
-                        onClick={(e) => toggleVisibility(obj, e)}
-                        style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '2px', fontSize: '12px' }}
-                        title={obj.visible ? '非表示にする' : '表示する'}
-                      >
-                        {obj.visible !== false ? '👁️' : '🙈'}
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteSelected(obj);
-                        }}
-                        style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '2px', fontSize: '12px', color: '#ef4444' }}
-                        title="削除"
-                      >
-                        🗑️
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* グループ内部の個別レイヤー表示・個別操作機能 */}
-                  {isGroup && isExpanded && (
-                    <div style={{ marginLeft: '16px', marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '4px', borderLeft: '2px solid #e5e7eb', paddingLeft: '8px' }}>
-                      {groupChildren.map((child: any, childIndex: number) => {
-                        const isChildSelected = activeObject === child;
-                        return (
-                          <div
-                            key={childIndex}
-                            onClick={(e) => handleLayerClick(child, e)}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justify: 'space-between',
-                              padding: '4px 6px',
-                              borderRadius: '4px',
-                              border: isChildSelected ? '1px solid #000000' : '1px solid #e2e8f0',
-                              backgroundColor: isChildSelected ? '#e2e8f0' : '#f8fafc',
-                              cursor: 'pointer',
-                              fontSize: '11px',
-                            }}
-                          >
-                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                              {getObjectLabel(child)}
-                            </span>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-                              <button
-                                onClick={(e) => toggleVisibility(child, e)}
-                                style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '2px', fontSize: '10px' }}
-                                title={child.visible ? '非表示にする' : '表示する'}
-                              >
-                                {child.visible !== false ? '👁️' : '🙈'}
-                              </button>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  deleteSelected(child);
-                                }}
-                                style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '2px', fontSize: '10px', color: '#ef4444' }}
-                                title="削除"
-                              >
-                                🗑️
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })
-          )}
         </div>
       </div>
     </div>
